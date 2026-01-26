@@ -1,0 +1,22 @@
+<?xml version="1.0" ?>
+<robot name="hexa_x_tilt">
+  <link name="base_link">
+    <inertial>
+      <mass value="2.02"/>
+      <origin rpy="0 0 0" xyz="0.001  0    -0.009"/>
+      <inertia ixx="0.011" ixy="0" ixz="0" iyy="0.015" iyz="0" izz="0.021"/>
+    </inertial>
+  </link>
+  <gazebo>
+    <plugin name="p3d_base_controller" filename="libgazebo_ros_p3d.so">
+      <alwaysOn>true</alwaysOn>
+      <updateRate>200.0</updateRate>
+      <bodyName>base_link</bodyName> <!-- This is the link for which ground truth data will be published. It is also used as the child_frame_id in the odometry message, which is not the correct thing to do because the linear and angular velocity are actually in the world frame, not the 'bodyName' frame. The core_odometry_transform packge will handle this by publishing a new odometry message with the frame_id and child_frame_id corrected.  -->
+      <topicName>ground_truth/state</topicName>
+      <gaussianNoise>0.0</gaussianNoise>
+      <frameName>world</frameName>
+      <xyzOffsets>0 0 0</xyzOffsets>
+      <rpyOffsets>0 0 0</rpyOffsets>
+    </plugin>
+  </gazebo>
+</robot>
