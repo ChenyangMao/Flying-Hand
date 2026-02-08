@@ -5,7 +5,7 @@ import sys
 
 
 class JsonOutput():
-    def __init__(self, groups, board, inject_xml_file_name):
+    def __init__(self, groups, board):
         all_json=dict()
         all_json['version']=1
         all_params=[]
@@ -140,10 +140,9 @@ class JsonOutput():
 
 
         #Json string output.
-        self.output = json.dumps(all_json, indent=2, sort_keys=True)
+        self.output = json.dumps(all_json, sort_keys=True)
 
 
     def Save(self, filename):
         with codecs.open(filename, 'w', 'utf-8') as f:
             f.write(self.output)
-

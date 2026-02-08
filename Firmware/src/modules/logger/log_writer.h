@@ -65,9 +65,11 @@ public:
 	/** stop all running threads and wait for them to exit */
 	void thread_stop();
 
-	void start_log_file(LogType type, const char *filename);
+	bool start_log_file(LogType type, const char *filename);
 
 	void stop_log_file(LogType type);
+
+	bool had_file_write_error() const;
 
 	void start_log_mavlink();
 
@@ -171,7 +173,8 @@ public:
 	{
 		if (_log_writer_file) { _log_writer_file->set_encryption_parameters(algorithm, key_idx, exchange_key_idx); }
 	}
-#endif
+#endif // PX4_CRYPTO
+
 private:
 
 	LogWriterFile *_log_writer_file = nullptr;

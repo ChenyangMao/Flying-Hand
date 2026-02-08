@@ -5,14 +5,21 @@ uint64 timestamp_sample
 
 uint32 device_id                # unique device ID for the sensor that does not change between power cycles
 
-int32 lat			# Latitude in 1E-7 degrees
-int32 lon			# Longitude in 1E-7 degrees
-int32 alt			# Altitude in 1E-3 meters above MSL, (millimetres)
-int32 alt_ellipsoid 		# Altitude in 1E-3 meters bove Ellipsoid, (millimetres)
+float64 latitude_deg		# Latitude in degrees, allows centimeter level RTK precision
+float64 longitude_deg		# Longitude in degrees, allows centimeter level RTK precision
+float64 altitude_msl_m		# Altitude above MSL, meters
+float64 altitude_ellipsoid_m	# Altitude above Ellipsoid, meters
 
 float32 s_variance_m_s		# GPS speed accuracy estimate, (metres/sec)
 float32 c_variance_rad		# GPS course accuracy estimate, (radians)
-uint8 fix_type # 0-1: no fix, 2: 2D fix, 3: 3D fix, 4: RTCM code differential, 5: Real-Time Kinematic, float, 6: Real-Time Kinematic, fixed, 8: Extrapolated. Some applications will not use the value of this field unless it is at least two, so always correctly fill in the fix.
+uint8 FIX_TYPE_NONE                   = 1       # Value 0 is also valid to represent no fix.
+uint8 FIX_TYPE_2D                     = 2
+uint8 FIX_TYPE_3D                     = 3
+uint8 FIX_TYPE_RTCM_CODE_DIFFERENTIAL = 4
+uint8 FIX_TYPE_RTK_FLOAT              = 5
+uint8 FIX_TYPE_RTK_FIXED              = 6
+uint8 FIX_TYPE_EXTRAPOLATED           = 8
+uint8 fix_type                  # Some applications will not use the value of this field unless it is at least two, so always correctly fill in the fix.
 
 float32 eph			# GPS horizontal position accuracy (metres)
 float32 epv			# GPS vertical position accuracy (metres)
@@ -23,18 +30,26 @@ float32 vdop			# Vertical dilution of precision
 int32 noise_per_ms		# GPS noise per millisecond
 uint16 automatic_gain_control   # Automatic gain control monitor
 
-uint8 JAMMING_STATE_UNKNOWN  = 0
-uint8 JAMMING_STATE_OK       = 1
-uint8 JAMMING_STATE_WARNING  = 2
-uint8 JAMMING_STATE_CRITICAL = 3
-uint8 jamming_state		# indicates whether jamming has been detected or suspected by the receivers. O: Unknown, 1: OK, 2: Warning, 3: Critical
-int32 jamming_indicator		# indicates jamming is occurring
+uint8 JAMMING_STATE_UNKNOWN   = 0 #default
+uint8 JAMMING_STATE_OK        = 1
+uint8 JAMMING_STATE_MITIGATED = 2
+uint8 JAMMING_STATE_DETECTED  = 3
+uint8 jamming_state	      # indicates whether jamming has been detected or suspected by the receivers. O: Unknown, 1: OK, 2: Mitigated, 3: Detected
+int32 jamming_indicator	      # indicates jamming is occurring
 
-uint8 SPOOFING_STATE_UNKNOWN   = 0
-uint8 SPOOFING_STATE_NONE      = 1
-uint8 SPOOFING_STATE_INDICATED = 2
-uint8 SPOOFING_STATE_MULTIPLE  = 3
-uint8 spoofing_state		# indicates whether spoofing has been detected or suspected by the receivers. O: Unknown, 1: OK, 2: Warning, 3: Critical
+uint8 SPOOFING_STATE_UNKNOWN   = 0 #default
+uint8 SPOOFING_STATE_OK        = 1
+uint8 SPOOFING_STATE_MITIGATED = 2
+uint8 SPOOFING_STATE_DETECTED  = 3
+uint8 spoofing_state	       # indicates whether spoofing has been detected or suspected by the receivers. O: Unknown, 1: OK, 2: Mitigated, 3: Detected
+
+# Combined authentication state (e.g. Galileo OSNMA)
+uint8 AUTHENTICATION_STATE_UNKNOWN      = 0 #default
+uint8 AUTHENTICATION_STATE_INITIALIZING = 1
+uint8 AUTHENTICATION_STATE_ERROR        = 2
+uint8 AUTHENTICATION_STATE_OK           = 3
+uint8 AUTHENTICATION_STATE_DISABLED     = 4
+uint8 authentication_state              # GPS signal authentication state
 
 float32 vel_m_s			# GPS ground speed, (metres/sec)
 float32 vel_n_m_s		# GPS North velocity, (metres/sec)
@@ -48,11 +63,28 @@ uint64 time_utc_usec		# Timestamp (microseconds, UTC), this is the timestamp whi
 
 uint8 satellites_used		# Number of satellites used
 
+uint32 SYSTEM_ERROR_OK                   = 0 #default
+uint32 SYSTEM_ERROR_INCOMING_CORRECTIONS = 1
+uint32 SYSTEM_ERROR_CONFIGURATION        = 2
+uint32 SYSTEM_ERROR_SOFTWARE             = 4
+uint32 SYSTEM_ERROR_ANTENNA              = 8
+uint32 SYSTEM_ERROR_EVENT_CONGESTION     = 16
+uint32 SYSTEM_ERROR_CPU_OVERLOAD         = 32
+uint32 SYSTEM_ERROR_OUTPUT_CONGESTION    = 64
+uint32 system_error                      # General errors with the connected GPS receiver
+
 float32 heading			# heading angle of XYZ body frame rel to NED. Set to NaN if not available and updated (used for dual antenna GPS), (rad, [-PI, PI])
 float32 heading_offset		# heading offset of dual antenna array in body frame. Set to NaN if not applicable. (rad, [-PI, PI])
 float32 heading_accuracy	# heading accuracy (rad, [0, 2PI])
 
 float32 rtcm_injection_rate	# RTCM message injection rate Hz
 uint8 selected_rtcm_instance	# uorb instance that is being used for RTCM corrections
+
+bool rtcm_crc_failed		# RTCM message CRC failure detected
+
+uint8 RTCM_MSG_USED_UNKNOWN = 0
+uint8 RTCM_MSG_USED_NOT_USED = 1
+uint8 RTCM_MSG_USED_USED = 2
+uint8 rtcm_msg_used		# Indicates if the RTCM message was used successfully by the receiver
 
 # TOPICS sensor_gps vehicle_gps_position

@@ -71,17 +71,14 @@ CameraCapture::CameraCapture() :
 	_p_camera_capture_edge = param_find("CAM_CAP_EDGE");
 	param_get(_p_camera_capture_edge, &_camera_capture_edge);
 
-	// get the capture channel from function configuration params
-	_capture_channel = -1;
-
-	for (unsigned i = 0; i < 16 && _capture_channel == -1; ++i) {
+	for (unsigned i = 0; i < PWM_OUTPUT_MAX_CHANNELS && _capture_channel == -1; ++i) {
 		char param_name[17];
 		snprintf(param_name, sizeof(param_name), "%s_%s%d", PARAM_PREFIX, "FUNC", i + 1);
 		param_t function_handle = param_find(param_name);
 		int32_t function;
 
 		if (function_handle != PARAM_INVALID && param_get(function_handle, &function) == 0) {
-			if (function == 2032) { // Camera_Capture
+			if (function == 2032) { // Camera_Capture see mixer_module/output_functions.yaml parameter metadata definition
 				_capture_channel = i;
 			}
 		}
@@ -226,7 +223,9 @@ void
 CameraCapture::capture_trampoline(void *context, uint32_t chan_index, hrt_abstime edge_time, uint32_t edge_state,
 				  uint32_t overflow)
 {
-	camera_capture::g_camera_capture->capture_callback(chan_index, edge_time, edge_state, overflow);
+	if (camera_capture::g_camera_capture) {
+		camera_capture::g_camera_capture->capture_callback(chan_index, edge_time, edge_state, overflow);
+	}
 }
 
 void
@@ -358,6 +357,11 @@ CameraCapture::stop()
 	ScheduleClear();
 
 	work_cancel(HPWORK, &_work_publisher);
+
+	if (_capture_channel >= 0) {
+		up_input_capture_set(_capture_channel, Disabled, 0, nullptr, nullptr);
+	}
+
 
 	if (camera_capture::g_camera_capture != nullptr) {
 		delete (camera_capture::g_camera_capture);

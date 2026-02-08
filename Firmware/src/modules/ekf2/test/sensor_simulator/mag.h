@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2019 ECL Development Team. All rights reserved.
+ *   Copyright (c) 2019-2023 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -52,9 +52,11 @@ public:
 	~Mag();
 
 	void setData(const Vector3f &mag);
+	void setBias(const Vector3f &bias) { _bias = bias; }
 
 private:
 	Vector3f _mag_data;
+	Vector3f _bias;
 
 	void send(uint64_t time) override;
 

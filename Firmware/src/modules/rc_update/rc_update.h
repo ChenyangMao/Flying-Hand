@@ -89,6 +89,7 @@ public:
 
 	int print_status() override;
 
+protected:
 	static constexpr uint64_t VALID_DATA_MIN_INTERVAL_US{1_s / 3}; // assume valid RC input is at least 3 Hz
 
 	void Run() override;
@@ -109,7 +110,7 @@ public:
 	/**
 	 * Update our local parameter cache.
 	 */
-	void		parameters_updated();
+	void updateParams() override;
 
 	/**
 	 * Get and limit value for specified RC function. Returns NAN if not mapped.
@@ -125,6 +126,15 @@ public:
 	switch_pos_t getRCSwitchOnOffPosition(uint8_t function, float threshold) const;
 
 	/**
+	 * Get 3-way switch position from the RC channel of the specified function
+	 *
+	 * @param function according to rc_channels_s::FUNCTION_XXX
+	 * @param on_threshold according to RC_XXX_TH parameters, negative means comparison is flipped
+	 * @param mid_threshold according to RC_XXX_MIDTH parameters, negative means comparison is flipped
+	 */
+	switch_pos_t getRCSwitch3WayPosition(uint8_t function, float on_threshold, float mid_threshold) const;
+
+	/**
 	 * Update parameters from RC channels if the functionality is activated and the
 	 * input has changed since the last update
 	 */
@@ -138,7 +148,6 @@ public:
 		uint16_t min[RC_MAX_CHAN_COUNT];
 		uint16_t trim[RC_MAX_CHAN_COUNT];
 		uint16_t max[RC_MAX_CHAN_COUNT];
-		uint16_t dz[RC_MAX_CHAN_COUNT];
 		bool rev[RC_MAX_CHAN_COUNT];
 
 		int32_t rc_map_param[rc_parameter_map_s::RC_PARAM_MAP_NCHAN];
@@ -149,7 +158,6 @@ public:
 		param_t trim[RC_MAX_CHAN_COUNT];
 		param_t max[RC_MAX_CHAN_COUNT];
 		param_t rev[RC_MAX_CHAN_COUNT];
-		param_t dz[RC_MAX_CHAN_COUNT];
 
 		param_t rc_map_param[rc_parameter_map_s::RC_PARAM_MAP_NCHAN];
 		param_t rc_param[rc_parameter_map_s::RC_PARAM_MAP_NCHAN];	/**< param handles for the parameters which are bound
@@ -171,6 +179,7 @@ public:
 	manual_control_switches_s _manual_switches_previous{};
 	manual_control_switches_s _manual_switches_last_publish{};
 	rc_channels_s _rc{};
+	bool _rc_calibrated{false};
 
 	rc_parameter_map_s _rc_parameter_map {};
 	float _param_rc_values[rc_parameter_map_s::RC_PARAM_MAP_NCHAN] {};	/**< parameter values for RC control */
@@ -212,6 +221,7 @@ public:
 		(ParamInt<px4::params::RC_MAP_LOITER_SW>) _param_rc_map_loiter_sw,
 		(ParamInt<px4::params::RC_MAP_OFFB_SW>) _param_rc_map_offb_sw,
 		(ParamInt<px4::params::RC_MAP_KILL_SW>) _param_rc_map_kill_sw,
+		(ParamInt<px4::params::RC_MAP_TERM_SW>) _param_rc_map_term_sw,
 		(ParamInt<px4::params::RC_MAP_ARM_SW>) _param_rc_map_arm_sw,
 		(ParamInt<px4::params::RC_MAP_TRANS_SW>) _param_rc_map_trans_sw,
 		(ParamInt<px4::params::RC_MAP_GEAR_SW>) _param_rc_map_gear_sw,
@@ -228,6 +238,8 @@ public:
 
 		(ParamInt<px4::params::RC_FAILS_THR>) _param_rc_fails_thr,
 
+		(ParamInt<px4::params::RC_MAP_PAY_SW>) _param_rc_map_pay_sw,
+
 		(ParamFloat<px4::params::RC_LOITER_TH>) _param_rc_loiter_th,
 		(ParamFloat<px4::params::RC_OFFB_TH>) _param_rc_offb_th,
 		(ParamFloat<px4::params::RC_KILLSWITCH_TH>) _param_rc_killswitch_th,
@@ -236,6 +248,8 @@ public:
 		(ParamFloat<px4::params::RC_GEAR_TH>) _param_rc_gear_th,
 		(ParamFloat<px4::params::RC_RETURN_TH>) _param_rc_return_th,
 		(ParamFloat<px4::params::RC_ENG_MOT_TH>) _param_rc_eng_mot_th,
+		(ParamFloat<px4::params::RC_PAYLOAD_TH>) _param_rc_payload_th,
+		(ParamFloat<px4::params::RC_PAYLOAD_MIDTH>) _param_rc_payload_midth,
 
 		(ParamInt<px4::params::RC_CHAN_CNT>) _param_rc_chan_cnt
 	)

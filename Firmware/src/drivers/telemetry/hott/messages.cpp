@@ -33,7 +33,7 @@
  ****************************************************************************/
 
 /**
- * @file messages.c
+ * @file messages.cpp
  *
  */
 
@@ -150,7 +150,7 @@ build_eam_response(uint8_t *buffer, size_t *size)
 	msg.eam_sensor_id = EAM_SENSOR_ID;
 	msg.sensor_text_id = EAM_SENSOR_TEXT_ID;
 
-	msg.temperature1 = (uint8_t)(airdata.baro_temp_celcius + 20);
+	msg.temperature1 = (uint8_t)(airdata.ambient_temperature + 20);
 	msg.temperature2 = msg.temperature1 - BOARD_TEMP_OFFSET_DEG;
 
 	msg.main_voltage_L = (uint8_t)(battery.voltage_v * 10);
@@ -242,14 +242,14 @@ build_gps_response(uint8_t *buffer, size_t *size)
 		msg.gps_speed_H = (uint8_t)(speed >> 8) & 0xff;
 
 		/* Get latitude in degrees, minutes and seconds */
-		double lat = ((double)(gps.lat)) * 1e-7d;
+		double lat = gps.latitude_deg;
 
 		/* Set the N or S specifier */
 		msg.latitude_ns = 0;
 
 		if (lat < 0) {
 			msg.latitude_ns = 1;
-			lat = abs(lat);
+			lat = fabs(lat);
 		}
 
 		int deg;
@@ -265,7 +265,7 @@ build_gps_response(uint8_t *buffer, size_t *size)
 		msg.latitude_sec_H = (uint8_t)(lat_sec >> 8) & 0xff;
 
 		/* Get longitude in degrees, minutes and seconds */
-		double lon = ((double)(gps.lon)) * 1e-7d;
+		double lon = gps.longitude_deg;
 
 		/* Set the E or W specifier */
 		msg.longitude_ew = 0;
@@ -285,7 +285,7 @@ build_gps_response(uint8_t *buffer, size_t *size)
 		msg.longitude_sec_H = (uint8_t)(lon_sec >> 8) & 0xff;
 
 		/* Altitude */
-		uint16_t alt = (uint16_t)(gps.alt * 1e-3f + 500.0f);
+		uint16_t alt = (uint16_t)(round(gps.altitude_msl_m) + 500.0);
 		msg.altitude_L = (uint8_t)alt & 0xff;
 		msg.altitude_H = (uint8_t)(alt >> 8) & 0xff;
 

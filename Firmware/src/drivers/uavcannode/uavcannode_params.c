@@ -32,15 +32,13 @@
  ****************************************************************************/
 
 /**
- * UAVCAN Node ID.
+ * UAVCAN CAN node ID (0 for dynamic allocation).
  *
- * Read the specs at http://uavcan.org to learn more about Node ID.
- *
- * @min 1
- * @max 125
+ * @min 0
+ * @max 127
  * @group UAVCAN
  */
-PARAM_DEFINE_INT32(CANNODE_NODE_ID, 120);
+PARAM_DEFINE_INT32(CANNODE_NODE_ID, 0);
 
 /**
  * UAVCAN CAN bus bitrate.
@@ -87,3 +85,38 @@ PARAM_DEFINE_INT32(CANNODE_SUB_RTCM, 0);
  * @group UAVCAN
  */
 PARAM_DEFINE_INT32(CANNODE_PUB_MBD, 0);
+
+/**
+ * Enable RawIMU pub
+ *
+ * @boolean
+ * @max 1
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(CANNODE_PUB_IMU, 0);
+
+/**
+ * Enable barometer publication
+ *
+ * Enables publication of static pressure and static temperature
+ * from the barometer sensor over UAVCAN.
+ *
+ * @boolean
+ * @max 1
+ * @reboot_required true
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(CANNODE_PUB_BAR, 1);
+
+/**
+ * Enable magnetometer publication
+ *
+ * Enables publication of magnetic field strength
+ * from the magnetometer sensor over UAVCAN.
+ *
+ * @boolean
+ * @max 1
+ * @reboot_required true
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(CANNODE_PUB_MAG, 1);

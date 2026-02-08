@@ -75,11 +75,11 @@ static int ramtron_attach(mtd_instance_s &instance)
 	return ENXIO;
 #else
 
-	/* start the RAMTRON driver, attempt 10 times */
+	/* start the RAMTRON driver at 30MHz */
 
-	int spi_speed_mhz = 10;
+	unsigned long spi_speed_hz = 30'000'000;
 
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; spi_speed_hz > 0; i++) {
 		/* initialize the right spi */
 		struct spi_dev_s *spi = px4_spibus_initialize(px4_find_spi_bus(instance.devid));
 
@@ -90,7 +90,7 @@ static int ramtron_attach(mtd_instance_s &instance)
 
 		/* this resets the spi bus, set correct bus speed again */
 		SPI_LOCK(spi, true);
-		SPI_SETFREQUENCY(spi, spi_speed_mhz * 1000 * 1000);
+		SPI_SETFREQUENCY(spi, spi_speed_hz);
 		SPI_SETBITS(spi, 8);
 		SPI_SETMODE(spi, SPIDEV_MODE3);
 		SPI_SELECT(spi, instance.devid, false);
@@ -108,7 +108,7 @@ static int ramtron_attach(mtd_instance_s &instance)
 		}
 
 		// try reducing speed for next attempt
-		spi_speed_mhz--;
+		spi_speed_hz -= 1'000'000;
 		px4_usleep(10000);
 	}
 
@@ -118,7 +118,7 @@ static int ramtron_attach(mtd_instance_s &instance)
 		return -EIO;
 	}
 
-	int ret = instance.mtd_dev->ioctl(instance.mtd_dev, MTDIOC_SETSPEED, (unsigned long)spi_speed_mhz * 1000 * 1000);
+	int ret = instance.mtd_dev->ioctl(instance.mtd_dev, MTDIOC_SETSPEED, spi_speed_hz);
 
 	if (ret != OK) {
 		// FIXME: From the previous warning call, it looked like this should have been fatal error instead. Tried
@@ -249,25 +249,19 @@ static const px4_mtd_manifest_t default_mtd_config = {
 
 #else
 
-const px4_mft_device_t spifram  = {             // FM25V02A on FMUM 32K 512 X 64
+const px4_mft_device_t spifram  = {             // FM25V02A on FMUM native: 32K X 8, emulated as (1024 Blocks of 32)
 	.bus_type = px4_mft_device_t::SPI,
 	.devid    = SPIDEV_FLASH(0)
 };
 
 const px4_mtd_entry_t fram = {
 	.device = &spifram,
-	.npart = 2,
+	.npart = 1,
 	.partd = {
 		{
 			.type = MTD_PARAMETERS,
 			.path = "/fs/mtd_params",
-			.nblocks = 32
-		},
-		{
-			.type = MTD_WAYPOINTS,
-			.path = "/fs/mtd_waypoints",
-			.nblocks = 32
-
+			.nblocks = (32768 / (1 << CONFIG_RAMTRON_EMULATE_SECTOR_SHIFT))
 		}
 	},
 };
@@ -357,6 +351,11 @@ memoryout:
 
 		} else if (mtd_list->entries[num_entry]->device->bus_type == px4_mft_device_t::SPI) {
 			rv = ramtron_attach(*instances[i]);
+#if defined(HAS_FLEXSPI)
+
+		} else if (mtd_list->entries[num_entry]->device->bus_type == px4_mft_device_t::FLEXSPI) {
+			rv = flexspi_attach(instances[i]);
+#endif
 
 		} else if (mtd_list->entries[num_entry]->device->bus_type == px4_mft_device_t::ONCHIP) {
 			instances[i]->n_partitions_current++;

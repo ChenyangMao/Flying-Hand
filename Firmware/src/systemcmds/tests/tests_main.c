@@ -78,10 +78,9 @@ const struct {
 #endif /* __PX4_NUTTX */
 
 	{"atomic_bitset",	test_atomic_bitset,	0},
-	{"bezier",		test_bezierQuad,	0},
 	{"bitset",		test_bitset,		0},
 	{"bson",		test_bson,		0},
-	{"dataman",		test_dataman,		OPT_NOJIGTEST | OPT_NOALLTEST},
+	{"dataman",		test_dataman,	OPT_NOJIGTEST | OPT_NOALLTEST},
 	{"file2",		test_file2,		OPT_NOJIGTEST},
 	{"float",		test_float,		0},
 	{"hott_telemetry",	test_hott_telemetry,	OPT_NOJIGTEST | OPT_NOALLTEST},

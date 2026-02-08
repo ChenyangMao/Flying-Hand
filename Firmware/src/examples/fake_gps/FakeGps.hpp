@@ -41,11 +41,12 @@
 #include <uORB/PublicationMulti.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/sensor_gps.h>
+#include <uORB/topics/sensor_gnss_status.h>
 
 class FakeGps : public ModuleBase<FakeGps>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	FakeGps(double latitude_deg = 29.6603018, double longitude_deg = -82.3160500, float altitude_m = 30.1f);
+	FakeGps(double latitude_deg = 29.6603018, double longitude_deg = -82.3160500, double altitude_m = 30.1);
 
 	~FakeGps() override = default;
 
@@ -66,8 +67,9 @@ private:
 	void Run() override;
 
 	uORB::PublicationMulti<sensor_gps_s> _sensor_gps_pub{ORB_ID(sensor_gps)};
+	uORB::PublicationMulti<sensor_gnss_status_s> _sensor_gnss_status_pub{ORB_ID(sensor_gnss_status)};
 
-	int32_t _latitude{296603018};   // Latitude in 1e-7 degrees
-	int32_t _longitude{-823160500}; // Longitude in 1e-7 degrees
-	int32_t _altitude{30100};       // Altitude in 1e-3 meters above MSL, (millimetres)
+	double _latitude{29.6603018};   // Latitude in degrees
+	double _longitude{-82.3160500}; // Longitude in degrees
+	double _altitude{30.1};         // Altitude in meters above MSL, (millimetres)
 };

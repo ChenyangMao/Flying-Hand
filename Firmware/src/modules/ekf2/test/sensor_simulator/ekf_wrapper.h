@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2019 ECL Development Team. All rights reserved.
+ *   Copyright (c) 2019-2023 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -73,9 +73,13 @@ public:
 	void disableBetaFusion();
 	bool isIntendingBetaFusion() const;
 
+	bool isIntendingAirspeedFusion() const;
+
 	void enableGpsFusion();
 	void disableGpsFusion();
 	bool isIntendingGpsFusion() const;
+	bool isGnssFaultDetected() const;
+	void setGnssDeadReckonMode();
 
 	void enableGpsHeadingFusion();
 	void disableGpsHeadingFusion();
@@ -98,31 +102,34 @@ public:
 	void disableExternalVisionHeadingFusion();
 	bool isIntendingExternalVisionHeadingFusion() const;
 
+	bool isIntendingMagFusion() const;
 	bool isIntendingMagHeadingFusion() const;
 	bool isIntendingMag3DFusion() const;
+	bool isMagHeadingConsistent() const;
+	bool isMagFaultDetected() const;
 	void setMagFuseTypeNone();
 	void enableMagStrengthCheck();
+	void enableMagInclinationCheck();
+	void enableMagCheckForceWMM();
 
 	bool isWindVelocityEstimated() const;
 
-	void enableTerrainRngFusion();
-	void disableTerrainRngFusion();
 	bool isIntendingTerrainRngFusion() const;
 
-	void enableTerrainFlowFusion();
-	void disableTerrainFlowFusion();
 	bool isIntendingTerrainFlowFusion() const;
 
 	Eulerf getEulerAngles() const;
 	float getYawAngle() const;
-	matrix::Vector4f getQuaternionVariance() const;
 	int getQuaternionResetCounter() const;
-
-	matrix::Vector3f getDeltaVelBiasVariance() const;
 
 	void enableDragFusion();
 	void disableDragFusion();
 	void setDragFusionParameters(const float &bcoef_x, const float &bcoef_y, const float &mcoef);
+
+	float getMagHeadingNoise() const;
+
+	void enableGyroBiasEstimation();
+	void disableGyroBiasEstimation();
 
 private:
 	std::shared_ptr<Ekf> _ekf;
