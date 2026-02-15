@@ -1,5 +1,0 @@
-menuconfig DRIVERS_INS_MICROSTRAIN
-	bool "microstrain"
-	default n
-	---help---
-		Enable support for Microstrain Sensors

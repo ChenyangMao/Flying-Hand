@@ -1,5 +1,0 @@
-menuconfig DRIVERS_INS_ILABS
-	bool "ilabs"
-	default n
-	---help---
-		Enable support for ilabs

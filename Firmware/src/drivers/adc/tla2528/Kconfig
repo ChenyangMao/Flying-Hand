@@ -1,5 +1,0 @@
-menuconfig DRIVERS_ADC_TLA2528
-	bool "TLA2528 driver"
-	default n
-	---help---
-		Enable support for TLA2528

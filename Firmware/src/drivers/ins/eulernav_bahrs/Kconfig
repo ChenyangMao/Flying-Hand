@@ -1,5 +1,0 @@
-menuconfig DRIVERS_INS_EULERNAV_BAHRS
-	bool "eulernav_bahrs"
-	default n
-	---help---
-		Enable support for EULER-NAV Baro-Inertial AHRS

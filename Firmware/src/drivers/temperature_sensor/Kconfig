@@ -1,3 +1,0 @@
-menu "TEMPERATURE_SENSOR"
-rsource "*/Kconfig"
-endmenu #TEMPERATURE_SENSOR

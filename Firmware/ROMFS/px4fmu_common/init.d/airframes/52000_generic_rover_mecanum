@@ -1,9 +1,0 @@
-#!/bin/sh
-#
-# @name Generic Rover Mecanum
-#
-# @type Rover
-# @class Rover
-#
-
-. ${R}etc/init.d/rc.rover_mecanum_defaults

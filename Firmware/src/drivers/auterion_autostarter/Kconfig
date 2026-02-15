@@ -1,5 +1,0 @@
-menuconfig DRIVERS_AUTERION_AUTOSTARTER
-	bool "auterion_autostarter"
-	default n
-	---help---
-		Enable support for auterion_autostarter

@@ -1,5 +1,0 @@
-menuconfig DRIVERS_INS_SBGECOM
-	bool "sbgecom"
-	default n
-	---help---
-		Enable support for sbgecom
