@@ -1,0 +1,3 @@
+[submodule "Firmware/Flying-Hand-PX4"]
+	path = Firmware/Flying-Hand-PX4
+	url = git@github.com:ChenyangMao/Flying-Hand-PX4.git
