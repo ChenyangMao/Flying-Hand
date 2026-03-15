@@ -1,0 +1,75 @@
+# ROS2 parameters for WrenchControlNode (PX4-based UAV)
+# This file is the ROS2 counterpart of the ROS1 wrench_px4_params.yaml.
+# It configures the force control loop and related settings.
+
+wrench_controller:
+  ros__parameters:
+    # Frames
+    # Target frame for the generated thrust (usually "world" or "map")
+    target_frame: "map"
+
+    # Frame name for the incoming wrench measurement from the F/T sensor
+    ft_sensor_frame: "ft_sensor"
+
+    # Body-fixed frame of the robot
+    robot_frame: "base_link"
+
+    # Inertial frame (usually "world" or "map")
+    world_frame: "map"
+
+    # Frame attached to the point of UAV contact with the environment (e.g. wall)
+    contact_frame: "contact"
+
+    # Position geofence (shared semantics with pose controller)
+    geofence.enable: false
+    geofence.x_min: -10.0
+    geofence.x_max:  10.0
+    geofence.y_min: -10.0
+    geofence.y_max:  10.0
+    geofence.z_min:  0.0
+    geofence.z_max:  5.0
+
+    # Pose control related parameters (for the internal PoseController)
+    max_xy_vel: 12.0
+    hover_thrust: 0.5
+    thrust_max: 1.0
+    thrust_min: 0.15
+    max_tilt: 45.0
+
+    # Controller loop frequency (Hz)
+    execute_target: 100.0
+
+    # Force loop PD gains and output thrust limits (copied from ROS1)
+    fx.P: 0.0
+    fx.D: 0.0
+    fx.min: -0.3
+    fx.max:  0.3
+
+    fy.P: 0.0
+    fy.D: 0.0
+    fy.min: -0.2
+    fy.max:  0.2
+
+    fz.P: 0.0012
+    fz.I: 0.009
+    fz.D: 0.0
+    fz.integral_threshold: 20.0
+    fz.min: -0.8
+    fz.max:  0.8
+
+    # Wrench filtering settings
+    ft_data.filter: true
+    ft_data.publish: true
+
+    # Filter buffer sizes (median/mean)
+    median_filter_max_buffer_size: 20
+    mean_filter_max_buffer_size: 20
+
+    # Tactile and sensor fusion settings
+    tactile.enable: false
+    sensor_fusion: false
+
+    # Feed-forward parameters for force control (copied from ROS1)
+    force_ff_coefficient: 0.01591
+    force_ff_coeffcient_bias: 0.04
+

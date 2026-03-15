@@ -1,0 +1,6 @@
+# YAML File for Wrench Controller Parameters for PX4-based UAVs in Gazebo Simulation Environment
+# This file should keep only the parameters that are additional to wrench_px4_params.yaml
+# or have different values than the real drone using the wrench_px4_params.yaml file.
+
+wrench_controller:
+  ros__parameters: {}

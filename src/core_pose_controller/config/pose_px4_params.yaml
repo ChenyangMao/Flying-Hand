@@ -1,0 +1,45 @@
+# ROS2 parameters for PoseControlNode (PX4-based UAV)
+# This file mirrors the ROS1 pose_px4_params.yaml semantics, but uses
+# ROS2's node-scoped parameter layout.
+
+pose_controller:
+  ros__parameters:
+    # Geofence for the UAV position (same meaning as ROS1)
+    geofence.enable: false
+    geofence.x_min: -10.0
+    geofence.x_max:  10.0
+    geofence.y_min: -10.0
+    geofence.y_max:  10.0
+    geofence.z_min:  0.0
+    geofence.z_max:  5.0
+
+    # Target frame for pose/thrust control
+    target_frame: "map"
+
+    # Motion and thrust limits
+    max_xy_vel: 12.0
+    hover_thrust: 0.5
+    thrust_max: 1.0
+    thrust_min: 0.15
+    max_tilt: 45.0
+
+    # Controller loop frequency (Hz)
+    execute_target: 100.0
+
+    # Position controller gains (P/I/D/FF) per axis: x, y, z
+    # Replace these with your tuned values or copy from ROS1 config.
+    P: [0.0, 0.0, 0.0]
+    I: [0.0, 0.0, 0.0]
+    D: [0.0, 0.0, 0.0]
+    FF: [0.0, 0.0, 0.0]
+
+    # Integral clamp and output limits
+    integral_threshold: [4.0, 4.0, 4.0]
+    min: [-1.0e9, -1.0e9, -1.0e9]
+    max: [ 1.0e9,  1.0e9,  1.0e9]
+
+    # Voltage compensation parameters (kept for compatibility)
+    voltage_compensation_gain: 0.0869
+    voltage_compensation_offset: -0.0664
+    voltage_compensation_update_rate: 0.005
+

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>core_px4_interface</name>
+  <version>0.0.0</version>
+  <description>ROS2 PX4 interface: DroneInterface plugin that forwards attitude_thrust_command to MAVROS for PX4 SITL/Gazebo or real vehicle.</description>
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>mav_msgs</depend>
+  <depend>pluginlib</depend>
+  <depend>core_drone_interface</depend>
+  <depend>mavros_msgs</depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

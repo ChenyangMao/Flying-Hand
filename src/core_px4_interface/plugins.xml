@@ -1,0 +1,5 @@
+<library path="px4_interface">
+  <class name="PX4Interface" type="core_px4_interface::PX4Interface" base_class_type="core_drone_interface::DroneInterface">
+    <description>PX4 interface: forwards attitude_thrust_command to MAVROS setpoint_raw/attitude for PX4 SITL/Gazebo or real vehicle.</description>
+  </class>
+</library>
