@@ -67,8 +67,7 @@ bool WrenchControlNode::initialize()
   double thrust_min = this->declare_parameter<double>("thrust_min", 0.15);
   double max_tilt_deg = this->declare_parameter<double>("max_tilt", 45.0);
 
-  // Control loop frequency: used by BaseNode::start_execute_timer()
-  (void)this->declare_parameter<double>("execute_target", 0.0);
+  // Control loop frequency: already declared by BaseNode; just read it here if needed.
 
   bool filter_ft_data =
     this->declare_parameter<bool>("ft_data.filter", true);
