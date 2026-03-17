@@ -25,27 +25,29 @@ add_library(wrench_controller_lib SHARED
 )
 target_include_directories(wrench_controller_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../core_pid_controller/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(wrench_controller_lib
-  rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs
+  rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs core_pid_controller
 )
-target_link_libraries(wrench_controller_lib core_pid_controller)
 
 # WrenchControlNode executable
 add_executable(wrench_controller
   src/wrench_controller_node.cpp
   src/wrench_controller_main.cpp
 )
-target_include_directories(wrench_controller PRIVATE include)
+target_include_directories(wrench_controller PRIVATE
+  include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../core_pose_controller/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../base_main_class/include
+)
 ament_target_dependencies(wrench_controller
   rclcpp geometry_msgs nav_msgs std_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs mav_msgs
+  base_main_class core_pid_controller core_pose_controller
 )
 target_link_libraries(wrench_controller
   wrench_controller_lib
-  base_main_class
-  core_pid_controller
-  pose_controller_lib
 )
 
 install(TARGETS wrench_controller_lib wrench_controller

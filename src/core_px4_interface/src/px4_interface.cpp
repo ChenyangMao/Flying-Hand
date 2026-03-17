@@ -94,6 +94,15 @@ void PX4Interface::command_attitude_thrust(const mav_msgs::msg::AttitudeThrust &
   attitude_target_pub_->publish(att);
 }
 
+void PX4Interface::command_velocity(geometry_msgs::msg::TwistStamped msg)
+{
+  (void)msg;
+  if (node_) {
+    RCLCPP_WARN_ONCE(node_->get_logger(),
+      "PX4Interface::command_velocity() is not implemented; use attitude commands instead.");
+  }
+}
+
 void PX4Interface::setpoint_timer_callback()
 {
   if (!has_last_command_ || !attitude_target_pub_) return;

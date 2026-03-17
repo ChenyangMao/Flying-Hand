@@ -2,6 +2,10 @@
 #define ROS2_CONTROL_STACK_WRENCH_CONTROLLER_HPP_
 
 #include <string>
+#include <deque>
+
+#include <tf2/LinearMath/Vector3.h>
+#include <tf2/LinearMath/Quaternion.h>
 
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"

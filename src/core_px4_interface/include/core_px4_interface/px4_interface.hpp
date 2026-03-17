@@ -23,6 +23,7 @@ public:
   bool has_control() override;
 
   void command_attitude_thrust(const mav_msgs::msg::AttitudeThrust & msg) override;
+  void command_velocity(geometry_msgs::msg::TwistStamped msg) override;
 
 private:
   void state_callback(const mavros_msgs::msg::State::SharedPtr msg);

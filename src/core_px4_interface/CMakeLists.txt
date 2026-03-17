@@ -18,6 +18,7 @@ add_library(px4_interface SHARED
 )
 target_include_directories(px4_interface PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../core_drone_interface/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(px4_interface

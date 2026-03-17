@@ -127,12 +127,12 @@ void PoseController::update_target(
     geometry_msgs::msg::TransformStamped tracking_point_pos_to_target_tf =
       tf_buffer.lookupTransform(
         target_frame_, target.header.frame_id,
-        tf2::TimePoint(target.header.stamp.time_since_epoch()));
+        tf2::TimePointZero);
 
     geometry_msgs::msg::TransformStamped tracking_point_vel_to_target_tf =
       tf_buffer.lookupTransform(
         target_frame_, target.header.frame_id,
-        tf2::TimePoint(target.header.stamp.time_since_epoch()));
+        tf2::TimePointZero);
 
     tf2::Transform pos_tf;
     tf2::fromMsg(tracking_point_pos_to_target_tf.transform, pos_tf);
@@ -186,12 +186,12 @@ void PoseController::update_state(
     geometry_msgs::msg::TransformStamped odom_pos_to_target_tf =
       tf_buffer.lookupTransform(
         target_frame_, odom.header.frame_id,
-        tf2::TimePoint(odom.header.stamp.time_since_epoch()));
+        tf2::TimePointZero);
 
     geometry_msgs::msg::TransformStamped odom_vel_to_target_tf =
       tf_buffer.lookupTransform(
         target_frame_, odom.child_frame_id,
-        tf2::TimePoint(odom.header.stamp.time_since_epoch()));
+        tf2::TimePointZero);
 
     tf2::Transform pos_tf;
     tf2::fromMsg(odom_pos_to_target_tf.transform, pos_tf);

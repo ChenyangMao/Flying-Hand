@@ -19,6 +19,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
+ament_export_dependencies(rosidl_default_runtime)
+
 add_library(drone_interface_lib SHARED
   src/drone_interface.cpp
 )
@@ -38,7 +40,10 @@ ament_target_dependencies(drone_interface_node
   rclcpp geometry_msgs std_msgs mav_msgs pluginlib base_main_class
 )
 target_link_libraries(drone_interface_node drone_interface_lib)
-ament_target_dependencies(drone_interface_node ${PROJECT_NAME})
+
+# Link generated service interfaces (DroneCommand) into this node
+rosidl_target_interfaces(drone_interface_node
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 install(TARGETS drone_interface_node drone_interface_lib
   ARCHIVE DESTINATION lib
@@ -61,6 +66,6 @@ install(DIRECTORY srv/
 ament_export_include_directories(include)
 ament_export_libraries(drone_interface_lib)
 ament_export_dependencies(
-  rclcpp geometry_msgs std_msgs mav_msgs pluginlib
+  rclcpp geometry_msgs std_msgs mav_msgs pluginlib rosidl_default_runtime
 )
 ament_package()

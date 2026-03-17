@@ -29,7 +29,7 @@ target_include_directories(pose_controller_lib PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(pose_controller_lib
-  rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs
+  rclcpp geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs base_main_class
 )
 
 # PoseControlNode executable
@@ -39,9 +39,9 @@ add_executable(pose_controller
 )
 target_include_directories(pose_controller PRIVATE include ${Eigen3_INCLUDE_DIRS})
 ament_target_dependencies(pose_controller
-  rclcpp geometry_msgs nav_msgs std_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs mav_msgs
+  rclcpp geometry_msgs nav_msgs std_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs mav_msgs base_main_class
 )
-target_link_libraries(pose_controller pose_controller_lib base_main_class)
+target_link_libraries(pose_controller pose_controller_lib)
 
 install(TARGETS pose_controller_lib pose_controller
   ARCHIVE DESTINATION lib

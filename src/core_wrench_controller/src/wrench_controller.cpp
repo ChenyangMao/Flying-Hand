@@ -223,18 +223,18 @@ bool WrenchController::calculate_thrust_torque(
     thrust_ff_sensor_frame.setZ(
       force_ff_coefficient * target_force_sensor_frame_.z() + force_ff_coefficient_bias);
 
-    thrust_vel_damping =
+    thrust_vel_damping_ =
       -velx_damping_coefficient * odometry_vel_world_frame_.z();
-    if (thrust_vel_damping > 0.05) {
-      thrust_vel_damping = 0.05;
-    } else if (thrust_vel_damping < -0.05) {
-      thrust_vel_damping = -0.05;
+    if (thrust_vel_damping_ > 0.05) {
+      thrust_vel_damping_ = 0.05;
+    } else if (thrust_vel_damping_ < -0.05) {
+      thrust_vel_damping_ = -0.05;
     }
 
     tf2::Vector3 last_thrust_des =
       delta_thrust_des_sensor_frame +
       thrust_ff_sensor_frame +
-      tf2::Vector3(0, 0, thrust_vel_damping);
+      tf2::Vector3(0, 0, thrust_vel_damping_);
 
     if (last_thrust_des.z() < 0.005) {
       last_thrust_des.setZ(0.005);
