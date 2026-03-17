@@ -21,7 +21,7 @@ sudo apt update
 sudo apt install python3-colcon-common-extensions
 sudo apt install ros-humble-mavros-msgs
 source /opt/ros/humble/setup.bash
-cd /home/xy/Flying-Hand
+cd Flying-Hand
 colcon build
 ```
 ## Test wrench controller
