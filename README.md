@@ -44,6 +44,10 @@ After installation:
 ```
 ros2 launch mavros px4.launch
 ```
+If failed, try:
+```
+ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
+```
 ### Launch ROS2 control stack
 One terminal for each one:
 ```
