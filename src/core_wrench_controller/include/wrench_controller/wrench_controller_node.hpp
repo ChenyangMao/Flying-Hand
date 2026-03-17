@@ -90,6 +90,9 @@ private:
   // Pose controller for motion control
   std::unique_ptr<pose_controller::PoseController> pose_controller_;
 
+  // Contact frame name (from parameter, used by combine_motion_and_force)
+  std::string contact_frame_{"contact"};
+
   // Callbacks (ROS2 equivalents of the ROS1 versions)
   void ft_data_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
   void ft_setpoint_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);

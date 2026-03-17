@@ -56,8 +56,7 @@ bool WrenchControlNode::initialize()
     this->declare_parameter<std::string>("robot_frame", "base_link");
   std::string world_frame =
     this->declare_parameter<std::string>("world_frame", "map");
-  std::string contact_frame =
-    this->declare_parameter<std::string>("contact_frame", "contact");
+  contact_frame_ = this->declare_parameter<std::string>("contact_frame", "contact");
   std::string camera_frame =
     this->declare_parameter<std::string>("camera_frame", "camera");
 
@@ -105,7 +104,7 @@ bool WrenchControlNode::initialize()
     sensor_frame.c_str(),
     target_frame.c_str(),
     camera_frame.c_str(),
-    contact_frame.c_str());
+    contact_frame_.c_str());
 
   RCLCPP_INFO(
     this->get_logger(),
@@ -315,7 +314,7 @@ bool WrenchControlNode::combine_motion_and_force(
     // Transform from thrust frame (e.g. world/map) to contact frame
     geometry_msgs::msg::TransformStamped tf_cv_msg =
       tf_buffer_->lookupTransform(
-        "contact",  // contact frame name is assumed; can be parameterized if needed
+        contact_frame_,
         thrust_frame,
         tf2::TimePointZero);
 
