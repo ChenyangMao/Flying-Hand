@@ -28,13 +28,19 @@ colcon build
 For every terminal:
 ```
 source /opt/ros/humble/setup.bash
-source /home/ubuntu/Flying-Hand/install/setup.bash
+source $HOME/Flying-Hand/install/setup.bash
 ```
 ### Start PX4
 ```
 make px4_sitl gz_hexa_scorpion
 ```
 ### Start MAVROS
+Package needed to be installed first:
+```
+sudo apt install ros-humble-mavros
+sudo /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
+```
+After installation:
 ```
 ros2 launch mavros px4.launch
 ```
