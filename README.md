@@ -15,8 +15,16 @@ make px4_sitl gazebo-classic_hexa_scorpion
 cd Firmware/Flying-Hand-PX4
 make px4_sitl gz_hexa_scorpion
 ```
-
-## Test Wrench Controller
+## Build wrench controller
+```
+sudo apt update
+sudo apt install python3-colcon-common-extensions
+sudo apt install ros-humble-mavros-msgs
+source /opt/ros/humble/setup.bash
+cd /home/xy/Flying-Hand
+colcon build
+```
+## Test wrench controller
 For every terminal:
 ```
 source /opt/ros/humble/setup.bash
