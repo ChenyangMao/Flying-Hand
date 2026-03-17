@@ -93,6 +93,7 @@ private:
   // Callbacks (ROS2 equivalents of the ROS1 versions)
   void ft_data_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
   void ft_setpoint_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
+  void tracking_point_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
   void odometry_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
   void switch_callback(const std_msgs::msg::Bool::SharedPtr msg);
 

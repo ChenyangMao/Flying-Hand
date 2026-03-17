@@ -123,7 +123,7 @@ bool PoseControlNode::initialize()
 
   odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
     "odometry",
-    10,
+    rclcpp::SensorDataQoS(),
     std::bind(&PoseControlNode::odometry_callback, this, std::placeholders::_1));
 
   arm_sub_ = this->create_subscription<std_msgs::msg::Bool>(

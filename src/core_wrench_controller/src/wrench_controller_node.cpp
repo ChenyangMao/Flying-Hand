@@ -197,8 +197,13 @@ bool WrenchControlNode::initialize()
 
   odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
     "odometry",
-    10,
+    rclcpp::SensorDataQoS(),
     std::bind(&WrenchControlNode::odometry_callback, this, std::placeholders::_1));
+
+  tracking_point_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    "tracking_point",
+    10,
+    std::bind(&WrenchControlNode::tracking_point_callback, this, std::placeholders::_1));
 
   // Mode switch (pose-only vs motion-force control), equivalent to ROS1 "wrench_controller/switch"
   switch_sub_ = this->create_subscription<std_msgs::msg::Bool>(
@@ -393,14 +398,23 @@ void WrenchControlNode::ft_setpoint_callback(
   }
 }
 
+void WrenchControlNode::tracking_point_callback(
+  const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+  if (pose_controller_) {
+    pose_controller_->update_target(*msg, *tf_buffer_);
+  }
+}
+
 void WrenchControlNode::odometry_callback(
   const nav_msgs::msg::Odometry::SharedPtr msg)
 {
-  if (!wrench_controller_) {
-    return;
+  if (wrench_controller_) {
+    wrench_controller_->update_odom_state(*msg, *tf_buffer_);
   }
-
-  wrench_controller_->update_odom_state(*msg, *tf_buffer_);
+  if (pose_controller_) {
+    pose_controller_->update_state(*msg, *tf_buffer_);
+  }
 }
 
 void WrenchControlNode::switch_callback(

@@ -1,280 +1,365 @@
 #!/usr/bin/env python3
 """
-Wall contact test using ROS 2 control stack.
+Wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
-This script is intended to be used with the whole C++ control stack in `src/`:
-  - core_drone_interface  (velocity / attitude / pose commands to the drone)
-  - core_px4_interface    (PX4 + MAVROS bridge)
-  - core_pose_controller  (position controller)
-  - core_wrench_controller (force controller)
+This script arms the drone, enters OFFBOARD mode, and uses MAVROS velocity
+setpoints to approach a wall.  After contact is detected via FT data, it
+switches the wrench controller to force-control mode and holds a constant
+desired force for a configurable duration.
 
-Goal:
-  - Use a forward velocity command to gently approach a wall.
-  - Detect contact using force/torque (FT) measurements.
-  - After contact, command a constant desired force through the wrench controller
-    and hold that contact for a configured time.
+Required running processes:
+  1. PX4 SITL (make px4_sitl gz_hexa_scorpion)
+  2. MAVROS   (ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580)
+  3. gz_ft_bridge.py  (bridges Gazebo FT sensor -> /ft_data)
+  4. core_wrench_controller  (filters /ft_data -> /ft_data_filtered, force control)
+  5. core_pose_controller    (optional, for wrench controller dependency)
+  6. core_drone_interface    (with PX4Interface plugin)
 
-This node does NOT talk to PX4 directly. It only uses ROS 2 topics:
-  - Publishes:
-      * /velocity_command          (geometry_msgs/TwistStamped)
-      * /ft_setpoint              (geometry_msgs/WrenchStamped)
-      * /wrench_controller/switch (std_msgs/Bool)
-  - Subscribes:
-      * /ft_data_filtered or /ft_data (geometry_msgs/WrenchStamped)
-
-Typical usage (example, adjust to your setup):
-  1. Start PX4 SITL + Gazebo + MAVROS.
-  2. Start ROS 2 control stack:
-       - core_drone_interface  (with PX4Interface plugin)
-       - core_pose_controller  (Gazebo params)
-       - core_wrench_controller (Gazebo params)
-       - FT bridge node from Gazebo to /ft_data or /ft_data_filtered
-  3. In a ROS 2 environment:
-       ros2 run <your_pkg> test_wall_contact_ros2.py
-
-You may need to adapt topic names and frames according to your setup.
+Usage:
+  python3 scripts/test_wall_contact_ros2.py
 """
 
 import math
-from enum import Enum
+from enum import Enum, auto
 from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 
 from geometry_msgs.msg import TwistStamped, WrenchStamped
+from mavros_msgs.msg import State as MavrosState
+from mavros_msgs.srv import CommandBool, SetMode
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
 
 class TestState(Enum):
-  """Simple finite-state machine for the contact test."""
-
-  APPROACH = 0
-  HOLD_FORCE = 1
-  DONE = 2
+    PREFLIGHT = auto()
+    TAKEOFF = auto()
+    APPROACH = auto()
+    HOLD_FORCE = auto()
+    DONE = auto()
 
 
 class WallContactTester(Node):
-  """
-  ROS 2 node that:
-    - Commands a forward body velocity to approach a wall.
-    - Monitors FT data to detect contact.
-    - After contact, sends a constant wrench setpoint to the wrench controller
-      and enables the motion–force control mixing via /wrench_controller/switch.
-  """
 
-  def __init__(self) -> None:
-    super().__init__("wall_contact_tester")
+    def __init__(self) -> None:
+        super().__init__("wall_contact_tester")
 
-    # Parameters (can be overridden via ROS 2 parameters)
-    self.declare_parameter("force_topic", "ft_data_filtered")
-    self.declare_parameter("force_threshold", 1.0)          # [N], contact detection threshold
-    self.declare_parameter("desired_force", 5.0)            # [N], desired contact force magnitude
-    self.declare_parameter("desired_force_axis", "x")       # "x", "y", or "z" in sensor frame
-    self.declare_parameter("approach_velocity", 0.2)        # [m/s] forward velocity during approach
-    self.declare_parameter("hold_time", 10.0)               # [s] hold time in force control mode
-    self.declare_parameter("velocity_command_frame", "map") # frame_id for velocity_command
-    self.declare_parameter("sensor_frame", "ft_sensor")     # frame_id of FT sensor for setpoint
-    self.declare_parameter("loop_rate", 50.0)               # [Hz] main loop timer
+        # --------------- parameters --------------- #
+        self.declare_parameter("force_topic", "ft_data_filtered")
+        self.declare_parameter("force_threshold", 1.0)
+        self.declare_parameter("desired_force", 5.0)
+        self.declare_parameter("desired_force_axis", "x")
+        self.declare_parameter("approach_velocity", 0.2)
+        self.declare_parameter("hold_time", 10.0)
+        self.declare_parameter("sensor_frame", "ft_sensor")
+        self.declare_parameter("takeoff_altitude", 2.0)
+        self.declare_parameter("takeoff_velocity", 0.5)
+        self.declare_parameter("loop_rate", 50.0)
 
-    force_topic = self.get_parameter("force_topic").get_parameter_value().string_value
-    self.force_threshold = (
-      self.get_parameter("force_threshold").get_parameter_value().double_value
-    )
-    self.desired_force = (
-      self.get_parameter("desired_force").get_parameter_value().double_value
-    )
-    self.desired_force_axis = (
-      self.get_parameter("desired_force_axis").get_parameter_value().string_value
-    ).lower()
-    self.approach_velocity = (
-      self.get_parameter("approach_velocity").get_parameter_value().double_value
-    )
-    self.hold_time = self.get_parameter("hold_time").get_parameter_value().double_value
-    self.velocity_frame = (
-      self.get_parameter("velocity_command_frame").get_parameter_value().string_value
-    )
-    self.sensor_frame = (
-      self.get_parameter("sensor_frame").get_parameter_value().string_value
-    )
-    loop_rate = self.get_parameter("loop_rate").get_parameter_value().double_value
+        force_topic = self.get_parameter("force_topic").value
+        self.force_threshold = self.get_parameter("force_threshold").value
+        self.desired_force = self.get_parameter("desired_force").value
+        self.desired_force_axis = self.get_parameter("desired_force_axis").value.lower()
+        self.approach_velocity = self.get_parameter("approach_velocity").value
+        self.hold_time = self.get_parameter("hold_time").value
+        self.sensor_frame = self.get_parameter("sensor_frame").value
+        self.takeoff_alt = self.get_parameter("takeoff_altitude").value
+        self.takeoff_vel = self.get_parameter("takeoff_velocity").value
+        loop_rate = self.get_parameter("loop_rate").value
 
-    # Publishers
-    self.vel_pub = self.create_publisher(TwistStamped, "velocity_command", 10)
-    self.ft_setpoint_pub = self.create_publisher(WrenchStamped, "ft_setpoint", 10)
-    self.switch_pub = self.create_publisher(Bool, "wrench_controller/switch", 10)
+        # --------------- MAVROS publishers / subscribers --------------- #
+        state_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.mavros_state: Optional[MavrosState] = None
+        self.state_sub = self.create_subscription(
+            MavrosState, "mavros/state", self._mavros_state_cb, state_qos)
 
-    # Subscriber: FT data (filtered or raw)
-    self.ft_sub = self.create_subscription(
-      WrenchStamped,
-      force_topic,
-      self._ft_callback,
-      10,
-    )
+        self.vel_pub = self.create_publisher(
+            TwistStamped, "mavros/setpoint_velocity/cmd_vel", 10)
 
-    # Internal state
-    self.state = TestState.APPROACH
-    self.last_force_msg: Optional[WrenchStamped] = None
-    self.last_force_norm: float = 0.0
-    self.contact_time: Optional[Time] = None
+        self.arming_client = self.create_client(CommandBool, "mavros/cmd/arming")
+        self.set_mode_client = self.create_client(SetMode, "mavros/set_mode")
 
-    # Main loop timer
-    period = 1.0 / loop_rate if loop_rate > 0.0 else 0.02
-    self.timer = self.create_timer(period, self._loop)
+        # --------------- wrench controller publishers --------------- #
+        self.ft_setpoint_pub = self.create_publisher(WrenchStamped, "ft_setpoint", 10)
+        self.switch_pub = self.create_publisher(Bool, "wrench_controller/switch", 10)
+        self.tracking_point_pub = self.create_publisher(Odometry, "tracking_point", 10)
 
-    self.get_logger().info(
-      f"WallContactTester started. Subscribing to '{force_topic}', "
-      f"approach_velocity={self.approach_velocity:.3f} m/s, "
-      f"force_threshold={self.force_threshold:.3f} N, "
-      f"desired_force={self.desired_force:.3f} N along {self.desired_force_axis.upper()} axis."
-    )
+        # --------------- odometry subscriber (for altitude & position) --------------- #
+        odom_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.current_alt: float = 0.0
+        self.last_odom: Optional[Odometry] = None
+        self.odom_sub = self.create_subscription(
+            Odometry, "mavros/local_position/odom", self._odom_callback, odom_qos)
 
-  # --------------------------------------------------------------------------- #
-  # Callbacks
-  # --------------------------------------------------------------------------- #
+        # --------------- FT subscriber --------------- #
+        self.ft_sub = self.create_subscription(
+            WrenchStamped, force_topic, self._ft_callback, 10)
 
-  def _ft_callback(self, msg: WrenchStamped) -> None:
-    """Store the latest FT message and compute its force magnitude."""
-    self.last_force_msg = msg
-    fx = msg.wrench.force.x
-    fy = msg.wrench.force.y
-    fz = msg.wrench.force.z
-    self.last_force_norm = math.sqrt(fx * fx + fy * fy + fz * fz)
+        # --------------- internal state --------------- #
+        self.state = TestState.PREFLIGHT
+        self.last_force_msg: Optional[WrenchStamped] = None
+        self.last_force_norm: float = 0.0
+        self.contact_time: Optional[Time] = None
+        self.hold_odom: Optional[Odometry] = None  # snapshot of odom at contact
+        self._arm_requested = False
+        self._offboard_requested = False
+        self._preflight_log_timer = 0
 
-  # --------------------------------------------------------------------------- #
-  # Main control loop
-  # --------------------------------------------------------------------------- #
+        # --------------- main loop --------------- #
+        period = 1.0 / loop_rate if loop_rate > 0 else 0.02
+        self.timer = self.create_timer(period, self._loop)
 
-  def _loop(self) -> None:
-    """Main FSM loop; runs at the configured loop_rate."""
-    if self.state == TestState.APPROACH:
-      self._step_approach()
-    elif self.state == TestState.HOLD_FORCE:
-      self._step_hold_force()
-    elif self.state == TestState.DONE:
-      # Keep publishing a safe zero command; node can be stopped by user.
-      self._publish_velocity(0.0, 0.0, 0.0)
-      return
+        self.get_logger().info(
+            f"WallContactTester started. force_topic='{force_topic}', "
+            f"approach_vel={self.approach_velocity:.2f} m/s, "
+            f"threshold={self.force_threshold:.1f} N, "
+            f"desired_force={self.desired_force:.1f} N ({self.desired_force_axis.upper()})."
+        )
 
-  # --------------------------------------------------------------------------- #
-  # FSM states
-  # --------------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Callbacks
+    # ------------------------------------------------------------------ #
 
-  def _step_approach(self) -> None:
-    """Send a forward velocity command until contact is detected."""
-    # Send forward velocity (in the velocity_frame; usually "map" or "world").
-    self._publish_velocity(self.approach_velocity, 0.0, 0.0)
+    def _mavros_state_cb(self, msg: MavrosState) -> None:
+        self.mavros_state = msg
 
-    # Only attempt contact detection if we have FT data.
-    if self.last_force_msg is None:
-      return
+    def _odom_callback(self, msg: Odometry) -> None:
+        self.current_alt = msg.pose.pose.position.z
+        self.last_odom = msg
 
-    if self.last_force_norm > self.force_threshold:
-      self.get_logger().info(
-        f"Contact detected. |F|={self.last_force_norm:.3f} N "
-        f"(threshold={self.force_threshold:.3f} N)."
-      )
-      # Stop forward motion.
-      self._publish_velocity(0.0, 0.0, 0.0)
+    def _ft_callback(self, msg: WrenchStamped) -> None:
+        self.last_force_msg = msg
+        f = msg.wrench.force
+        self.last_force_norm = math.sqrt(f.x**2 + f.y**2 + f.z**2)
 
-      # Start force control: send desired wrench and enable switch.
-      self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
-      self._set_wrench_switch(True)
+    # ------------------------------------------------------------------ #
+    # Main loop
+    # ------------------------------------------------------------------ #
 
-      # Record contact time and transition to HOLD_FORCE.
-      self.contact_time = self.get_clock().now()
-      self.state = TestState.HOLD_FORCE
+    def _loop(self) -> None:
+        if self.state == TestState.PREFLIGHT:
+            self._step_preflight()
+        elif self.state == TestState.TAKEOFF:
+            self._step_takeoff()
+        elif self.state == TestState.APPROACH:
+            self._step_approach()
+        elif self.state == TestState.HOLD_FORCE:
+            self._step_hold_force()
+        elif self.state == TestState.DONE:
+            self._publish_velocity(0.0, 0.0, 0.0)
+            self.get_logger().info("Test done. Hovering. Ctrl+C to exit.",
+                                   throttle_duration_sec=5.0)
 
-  def _step_hold_force(self) -> None:
-    """Keep contact by holding a constant wrench setpoint for a fixed duration."""
-    # Keep velocity at zero; thrust is modulated by the wrench controller.
-    self._publish_velocity(0.0, 0.0, 0.0)
+    # ------------------------------------------------------------------ #
+    # PREFLIGHT: wait for MAVROS connection, arm, OFFBOARD
+    # ------------------------------------------------------------------ #
 
-    # Re-publish wrench setpoint and keep switch enabled (robust to small losses).
-    self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
-    self._set_wrench_switch(True)
+    def _step_preflight(self) -> None:
+        # PX4 OFFBOARD requires setpoint stream before mode switch
+        self._publish_velocity(0.0, 0.0, 0.0)
 
-    # Check hold time.
-    if self.contact_time is None:
-      # Should not happen, but safeguard.
-      self.contact_time = self.get_clock().now()
-      return
+        if self.mavros_state is None:
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info("Waiting for MAVROS state...")
+            return
 
-    elapsed = (self.get_clock().now() - self.contact_time).nanoseconds * 1e-9
-    # Log current force from FT if available.
-    if self.last_force_msg is not None:
-      self.get_logger().info(
-        f"Holding contact for {elapsed:.1f}/{self.hold_time:.1f}s, "
-        f"|F|={self.last_force_norm:.3f} N"
-      )
+        if not self.mavros_state.connected:
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info("Waiting for FCU connection...")
+            return
 
-    if elapsed >= self.hold_time:
-      self.get_logger().info(
-        f"Force hold completed ({self.hold_time:.1f}s). Releasing wrench control."
-      )
-      # Disable wrench control and clear setpoint.
-      self._set_wrench_switch(False)
-      self._publish_wrench_setpoint(0.0, self.desired_force_axis)
+        # Request OFFBOARD mode (must send setpoints first)
+        if self.mavros_state.mode != "OFFBOARD" and not self._offboard_requested:
+            self.get_logger().info("Requesting OFFBOARD mode...")
+            if self.set_mode_client.service_is_ready():
+                req = SetMode.Request()
+                req.custom_mode = "OFFBOARD"
+                self.set_mode_client.call_async(req)
+                self._offboard_requested = True
+            return
 
-      self.state = TestState.DONE
+        if self.mavros_state.mode != "OFFBOARD":
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info(
+                    f"Waiting for OFFBOARD (current mode: {self.mavros_state.mode})...")
+            # Re-request periodically
+            if self._preflight_log_timer % 200 == 0:
+                self._offboard_requested = False
+            return
 
-  # --------------------------------------------------------------------------- #
-  # Helper publishers
-  # --------------------------------------------------------------------------- #
+        # Arm
+        if not self.mavros_state.armed and not self._arm_requested:
+            self.get_logger().info("Arming drone...")
+            if self.arming_client.service_is_ready():
+                req = CommandBool.Request()
+                req.value = True
+                self.arming_client.call_async(req)
+                self._arm_requested = True
+            return
 
-  def _publish_velocity(self, vx: float, vy: float, vz: float) -> None:
-    """Publish a velocity command (TwistStamped) to velocity_command."""
-    msg = TwistStamped()
-    msg.header.stamp = self.get_clock().now().to_msg()
-    msg.header.frame_id = self.velocity_frame
-    msg.twist.linear.x = float(vx)
-    msg.twist.linear.y = float(vy)
-    msg.twist.linear.z = float(vz)
-    self.vel_pub.publish(msg)
+        if not self.mavros_state.armed:
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info("Waiting for arm confirmation...")
+            if self._preflight_log_timer % 200 == 0:
+                self._arm_requested = False
+            return
 
-  def _publish_wrench_setpoint(self, force_mag: float, axis: str) -> None:
-    """Publish a wrench setpoint with a given force magnitude along one axis."""
-    msg = WrenchStamped()
-    msg.header.stamp = self.get_clock().now().to_msg()
-    msg.header.frame_id = self.sensor_frame
+        self.get_logger().info(
+            f"Drone armed and in OFFBOARD mode. Taking off to {self.takeoff_alt:.1f}m...")
+        self.state = TestState.TAKEOFF
 
-    fx = fy = fz = 0.0
-    if axis == "x":
-      fx = force_mag
-    elif axis == "y":
-      fy = force_mag
-    elif axis == "z":
-      fz = force_mag
-    else:
-      # Fallback: use X-axis if an unknown axis is specified.
-      fx = force_mag
+    # ------------------------------------------------------------------ #
+    # TAKEOFF: climb to target altitude
+    # ------------------------------------------------------------------ #
 
-    msg.wrench.force.x = fx
-    msg.wrench.force.y = fy
-    msg.wrench.force.z = fz
-    # Torque setpoint is kept zero by default; extend if needed.
-    self.ft_setpoint_pub.publish(msg)
+    def _step_takeoff(self) -> None:
+        if not self.mavros_state or not self.mavros_state.armed:
+            self.get_logger().warn("Lost arm during takeoff, re-arming...")
+            self._arm_requested = False
+            self.state = TestState.PREFLIGHT
+            return
 
-  def _set_wrench_switch(self, enabled: bool) -> None:
-    """Publish to wrench_controller/switch to enable/disable force-control mixing."""
-    msg = Bool()
-    msg.data = bool(enabled)
-    self.switch_pub.publish(msg)
+        self._publish_velocity(0.0, 0.0, self.takeoff_vel)
+
+        if self.current_alt >= self.takeoff_alt * 0.95:
+            self.get_logger().info(
+                f"Reached altitude {self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m). "
+                "Starting approach.")
+            self.state = TestState.APPROACH
+        else:
+            self.get_logger().info(
+                f"Taking off... alt={self.current_alt:.2f}/{self.takeoff_alt:.1f}m",
+                throttle_duration_sec=1.0,
+            )
+
+    # ------------------------------------------------------------------ #
+    # APPROACH: fly forward until contact
+    # ------------------------------------------------------------------ #
+
+    def _step_approach(self) -> None:
+        self._publish_velocity(self.approach_velocity, 0.0, 0.0)
+
+        if self.last_force_msg is None:
+            return
+
+        if self.last_force_norm > self.force_threshold:
+            self.get_logger().info(
+                f"Contact detected! |F|={self.last_force_norm:.3f} N "
+                f"(threshold={self.force_threshold:.1f} N)")
+            # Snapshot current pose as the hold position for pose controller
+            self.hold_odom = self.last_odom
+            self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
+            self._set_wrench_switch(True)
+            self.contact_time = self.get_clock().now()
+            self.get_logger().info(
+                "Switched to force control. Wrench controller now commands attitude/thrust.")
+            self.state = TestState.HOLD_FORCE
+
+    # ------------------------------------------------------------------ #
+    # HOLD_FORCE: maintain desired contact force
+    # ------------------------------------------------------------------ #
+
+    def _step_hold_force(self) -> None:
+        # Publish tracking_point so the wrench controller's internal pose
+        # controller has a valid target.  Use the snapshot taken at contact.
+        self._publish_tracking_point()
+
+        # Keep re-sending the wrench setpoint and switch.
+        self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
+        self._set_wrench_switch(True)
+
+        if self.contact_time is None:
+            self.contact_time = self.get_clock().now()
+            return
+
+        elapsed = (self.get_clock().now() - self.contact_time).nanoseconds * 1e-9
+        if self.last_force_msg is not None:
+            self.get_logger().info(
+                f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  |F|={self.last_force_norm:.3f} N",
+                throttle_duration_sec=1.0,
+            )
+
+        if elapsed >= self.hold_time:
+            self.get_logger().info(
+                f"Force hold completed ({self.hold_time:.1f}s). Releasing.")
+            self._set_wrench_switch(False)
+            self._publish_wrench_setpoint(0.0, self.desired_force_axis)
+            self.state = TestState.DONE
+
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+
+    def _publish_tracking_point(self) -> None:
+        """Publish the hold-position as a tracking_point for the wrench controller's
+        internal pose controller.  Also keeps PX4 OFFBOARD alive via the attitude
+        setpoint stream from wrench_controller → drone_interface → MAVROS."""
+        if self.hold_odom is None:
+            return
+        msg = Odometry()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.hold_odom.header.frame_id
+        msg.child_frame_id = self.hold_odom.child_frame_id
+        msg.pose = self.hold_odom.pose
+        # Zero velocity target (hold position)
+        self.tracking_point_pub.publish(msg)
+
+    def _publish_velocity(self, vx: float, vy: float, vz: float) -> None:
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "map"
+        msg.twist.linear.x = float(vx)
+        msg.twist.linear.y = float(vy)
+        msg.twist.linear.z = float(vz)
+        self.vel_pub.publish(msg)
+
+    def _publish_wrench_setpoint(self, force_mag: float, axis: str) -> None:
+        msg = WrenchStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.sensor_frame
+        if axis == "x":
+            msg.wrench.force.x = force_mag
+        elif axis == "y":
+            msg.wrench.force.y = force_mag
+        elif axis == "z":
+            msg.wrench.force.z = force_mag
+        else:
+            msg.wrench.force.x = force_mag
+        self.ft_setpoint_pub.publish(msg)
+
+    def _set_wrench_switch(self, enabled: bool) -> None:
+        msg = Bool()
+        msg.data = bool(enabled)
+        self.switch_pub.publish(msg)
 
 
 def main(args=None) -> None:
-  rclpy.init(args=args)
-  node = WallContactTester()
-  try:
-    rclpy.spin(node)
-  except KeyboardInterrupt:
-    node.get_logger().info("WallContactTester interrupted by user.")
-  finally:
-    node.destroy_node()
-    rclpy.shutdown()
+    rclpy.init(args=args)
+    node = WallContactTester()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("Interrupted by user.")
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
-  main()
-
+    main()
