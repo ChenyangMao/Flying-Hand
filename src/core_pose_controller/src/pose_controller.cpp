@@ -165,6 +165,9 @@ void PoseController::update_target(
       target.pose.pose.orientation.w);
     tf2::Quaternion q_in_target = pos_tf * q_target;
 
+    // Attitude in target frame (same as ROS1)
+    tracking_point_attitude_target_frame_ = q_in_target;
+
     // Yaw in target frame
     double roll, pitch, yaw;
     tf2::Matrix3x3(q_in_target).getRPY(roll, pitch, yaw);
@@ -261,6 +264,10 @@ bool PoseController::calculate_thrust(
 
   Eigen::Vector3d pos_e(pos_error.x(), pos_error.y(), pos_error.z());
   Eigen::Vector3d vel_e(vel_error.x(), vel_error.y(), vel_error.z());
+  Eigen::Vector3d thrust_target(
+    tracking_point_thrust_target_frame_.x(),
+    tracking_point_thrust_target_frame_.y(),
+    tracking_point_thrust_target_frame_.z());
 
   integral_ += pos_e * dt;
   // clamp integral
@@ -272,8 +279,9 @@ bool PoseController::calculate_thrust(
     }
   }
 
+  // Same formula as ROS1: P*pos_err + D*vel_err + I*integral + FF + thrust_target
   Eigen::Vector3d thrust_cmd =
-    P_ * pos_e + I_ * integral_ + D_ * vel_e + FF_;
+    P_ * pos_e + I_ * integral_ + D_ * vel_e + FF_ + thrust_target;
 
   // Apply min/max limits
   for (int i = 0; i < 3; ++i) {
@@ -284,14 +292,22 @@ bool PoseController::calculate_thrust(
     }
   }
 
-  thrust_des = tf2::Vector3(thrust_cmd[0], thrust_cmd[1], thrust_cmd[2]);
+  // Same as ROS1: add hover_thrust to z component
+  thrust_des = tf2::Vector3(
+    thrust_cmd[0],
+    thrust_cmd[1],
+    thrust_cmd[2] + hover_thrust_);
 
   // Constrain thrust vector based on tilt and thrust magnitude
   constrain_thrust(thrust_des);
 
-  // Attitude setpoint can be computed from thrust direction (simple model)
-  // Here we keep att_des as identity; full attitude calc is done in CalculateAttitudeThrust.
-  att_des = tf2::Quaternion(0, 0, 0, 1);
+  // Same as ROS1: use tracking point attitude as desired attitude
+  att_des = tracking_point_attitude_target_frame_;
+  // Fallback to identity if quaternion is invalid (e.g. before first target)
+  if (att_des.x() == 0.0 && att_des.y() == 0.0 &&
+      att_des.z() == 0.0 && att_des.w() == 0.0) {
+    att_des.setValue(0.0, 0.0, 0.0, 1.0);
+  }
 
   time_prev_ = time_now;
   active_ = true;

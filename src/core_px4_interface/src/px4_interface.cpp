@@ -1,5 +1,7 @@
 #include "core_px4_interface/px4_interface.hpp"
 #include <pluginlib/class_list_macros.hpp>
+#include <cmath>
+#include <algorithm>
 #include <mavros_msgs/msg/state.hpp>
 #include <mavros_msgs/msg/attitude_target.hpp>
 #include <mavros_msgs/srv/command_bool.hpp>
@@ -87,7 +89,12 @@ void PX4Interface::command_attitude_thrust(const mav_msgs::msg::AttitudeThrust &
   att.body_rate.x = 0.0f;
   att.body_rate.y = 0.0f;
   att.body_rate.z = 0.0f;
-  att.thrust = static_cast<float>(msg.thrust.z);
+  // Use thrust magnitude (same as ROS1) instead of thrust.z only
+  const double thrust_mag = std::sqrt(
+    msg.thrust.x * msg.thrust.x +
+    msg.thrust.y * msg.thrust.y +
+    msg.thrust.z * msg.thrust.z);
+  att.thrust = static_cast<float>(std::clamp(thrust_mag, 0.0, 1.0));
 
   last_attitude_target_ = att;
   has_last_command_ = true;

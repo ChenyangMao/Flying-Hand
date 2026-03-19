@@ -28,11 +28,13 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 
-from geometry_msgs.msg import TwistStamped, WrenchStamped
+from geometry_msgs.msg import TransformStamped, TwistStamped, WrenchStamped
+from mav_msgs.msg import AttitudeThrust
 from mavros_msgs.msg import State as MavrosState
 from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
+from tf2_ros import TransformBroadcaster
 
 
 class TestState(Enum):
@@ -59,6 +61,10 @@ class WallContactTester(Node):
         self.declare_parameter("takeoff_altitude", 2.0)
         self.declare_parameter("takeoff_velocity", 0.5)
         self.declare_parameter("loop_rate", 50.0)
+        # Pose controller uses TF to compute thrust. In some setups, `map` and
+        # `base_link` might be in different TF trees; bridge them here.
+        self.declare_parameter("map_frame_id", "map")
+        self.declare_parameter("base_link_frame_id", "base_link")
 
         force_topic = self.get_parameter("force_topic").value
         self.force_threshold = self.get_parameter("force_threshold").value
@@ -70,6 +76,8 @@ class WallContactTester(Node):
         self.takeoff_alt = self.get_parameter("takeoff_altitude").value
         self.takeoff_vel = self.get_parameter("takeoff_velocity").value
         loop_rate = self.get_parameter("loop_rate").value
+        self.map_frame_id = self.get_parameter("map_frame_id").value
+        self.base_link_frame_id = self.get_parameter("base_link_frame_id").value
 
         # --------------- MAVROS publishers / subscribers --------------- #
         state_qos = QoSProfile(
@@ -103,9 +111,17 @@ class WallContactTester(Node):
         self.odom_sub = self.create_subscription(
             Odometry, "mavros/local_position/odom", self._odom_callback, odom_qos)
 
+        # TF broadcaster (repair missing TF connection)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
         # --------------- FT subscriber --------------- #
         self.ft_sub = self.create_subscription(
             WrenchStamped, force_topic, self._ft_callback, 10)
+
+        # --------------- attitude/thrust subscriber (from wrench controller) --------------- #
+        self.last_attitude_thrust: Optional[AttitudeThrust] = None
+        self.attitude_thrust_sub = self.create_subscription(
+            AttitudeThrust, "attitude_thrust_command", self._attitude_thrust_cb, 10)
 
         # --------------- internal state --------------- #
         self.state = TestState.PREFLIGHT
@@ -149,6 +165,7 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _loop(self) -> None:
+        self._publish_map_to_base_link_tf()
         if self.state == TestState.PREFLIGHT:
             self._step_preflight()
         elif self.state == TestState.TAKEOFF:
@@ -269,6 +286,7 @@ class WallContactTester(Node):
             self.contact_time = self.get_clock().now()
             self.get_logger().info(
                 "Switched to force control. Wrench controller now commands attitude/thrust.")
+            self._log_attitude_thrust()
             self.state = TestState.HOLD_FORCE
 
     # ------------------------------------------------------------------ #
@@ -290,10 +308,15 @@ class WallContactTester(Node):
 
         elapsed = (self.get_clock().now() - self.contact_time).nanoseconds * 1e-9
         if self.last_force_msg is not None:
-            self.get_logger().info(
-                f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  |F|={self.last_force_norm:.3f} N",
-                throttle_duration_sec=1.0,
-            )
+            log_msg = f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  |F|={self.last_force_norm:.3f} N"
+            if self.last_attitude_thrust is not None:
+                t = self.last_attitude_thrust.thrust
+                q = self.last_attitude_thrust.attitude
+                thrust_mag = math.sqrt(t.x**2 + t.y**2 + t.z**2)
+                log_msg += (
+                    f"  thrust=({t.x:.3f},{t.y:.3f},{t.z:.3f}) |T|={thrust_mag:.3f}"
+                    f"  att=(x={q.x:.3f},y={q.y:.3f},z={q.z:.3f},w={q.w:.3f})")
+            self.get_logger().info(log_msg, throttle_duration_sec=1.0)
 
         if elapsed >= self.hold_time:
             self.get_logger().info(
@@ -305,6 +328,45 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _publish_map_to_base_link_tf(self) -> None:
+        """Broadcast `map -> base_link` based on MAVROS odometry.
+
+        The internal pose controller does TF lookups with `target_frame=map`
+        and `odom.child_frame_id=base_link`. If those are disconnected in TF,
+        thrust/attitude computation fails and no `attitude_thrust_command`
+        will be published.
+        """
+        if self.last_odom is None:
+            return
+
+        # Use the pose from mavros/local_position/odom.
+        odom_pose = self.last_odom.pose.pose
+
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = self.map_frame_id
+        t.child_frame_id = self.base_link_frame_id
+
+        t.transform.translation.x = float(odom_pose.position.x)
+        t.transform.translation.y = float(odom_pose.position.y)
+        t.transform.translation.z = float(odom_pose.position.z)
+
+        t.transform.rotation.x = float(odom_pose.orientation.x)
+        t.transform.rotation.y = float(odom_pose.orientation.y)
+        t.transform.rotation.z = float(odom_pose.orientation.z)
+        t.transform.rotation.w = float(odom_pose.orientation.w)
+
+        # If quaternion is invalid (all zeros), skip broadcasting.
+        if (
+            t.transform.rotation.x == 0.0
+            and t.transform.rotation.y == 0.0
+            and t.transform.rotation.z == 0.0
+            and t.transform.rotation.w == 0.0
+        ):
+            return
+
+        self.tf_broadcaster.sendTransform(t)
 
     def _publish_tracking_point(self) -> None:
         """Publish the hold-position as a tracking_point for the wrench controller's
@@ -347,6 +409,20 @@ class WallContactTester(Node):
         msg = Bool()
         msg.data = bool(enabled)
         self.switch_pub.publish(msg)
+
+    def _attitude_thrust_cb(self, msg: AttitudeThrust) -> None:
+        self.last_attitude_thrust = msg
+
+    def _log_attitude_thrust(self) -> None:
+        if self.last_attitude_thrust is None:
+            self.get_logger().info("  (no attitude/thrust received yet)")
+            return
+        t = self.last_attitude_thrust.thrust
+        q = self.last_attitude_thrust.attitude
+        thrust_mag = math.sqrt(t.x**2 + t.y**2 + t.z**2)
+        self.get_logger().info(
+            f"  thrust=({t.x:.3f},{t.y:.3f},{t.z:.3f}) |T|={thrust_mag:.3f}  "
+            f"att=(x={q.x:.3f},y={q.y:.3f},z={q.z:.3f},w={q.w:.3f})")
 
 
 def main(args=None) -> None:
