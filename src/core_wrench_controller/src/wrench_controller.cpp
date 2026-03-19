@@ -1,7 +1,9 @@
 #include "wrench_controller/wrench_controller.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <deque>
+#include <iostream>
 
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -187,6 +189,19 @@ bool WrenchController::calculate_thrust_torque(
   double velx_damping_coefficient)
 {
   if (!got_ft_data_ || !got_target_wrench_) {
+    static auto last_log_time = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (
+      last_log_time.time_since_epoch().count() == 0 ||
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log_time).count() > 1000)
+    {
+      std::cerr
+        << "[wrench_controller] calculate_thrust_torque blocked:"
+        << " got_ft_data=" << (got_ft_data_ ? "true" : "false")
+        << " got_target_wrench=" << (got_target_wrench_ ? "true" : "false")
+        << std::endl;
+      last_log_time = now;
+    }
     return false;
   }
 
@@ -258,7 +273,22 @@ bool WrenchController::calculate_thrust_torque(
     last_torque_des = torque_des;
 
     return true;
-  } catch (const tf2::TransformException &) {
+  } catch (const tf2::TransformException & ex) {
+    static auto last_tf_log_time = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (
+      last_tf_log_time.time_since_epoch().count() == 0 ||
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tf_log_time).count() > 1000)
+    {
+      std::cerr
+        << "[wrench_controller] calculate_thrust_torque TF lookup failed: "
+        << ex.what()
+        << " (thrust_output_frame=" << thrust_output_frame_
+        << ", torque_output_frame=" << torque_output_frame_
+        << ", sensor_frame=" << sensor_frame_ << ")"
+        << std::endl;
+      last_tf_log_time = now;
+    }
     return false;
   }
 }

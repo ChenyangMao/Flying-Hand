@@ -244,6 +244,11 @@ bool WrenchControlNode::execute()
         this->get_parameter("force_ff_coeffcient_bias").as_double(),
         wrench_controller_ff_force_,
         this->get_parameter("velx_damping_coefficient").as_double())) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "Motion-force branch skipped: calculate_thrust_torque() returned false.");
       return true;
     }
 
@@ -262,6 +267,11 @@ bool WrenchControlNode::execute()
         force_constraint_vec,
         this->get_parameter("target_frame").as_string(),
         thrust_des)) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "Motion-force branch skipped: combine_motion_and_force() returned false.");
       return true;
     }
   }

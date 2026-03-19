@@ -65,6 +65,14 @@ class WallContactTester(Node):
         # `base_link` might be in different TF trees; bridge them here.
         self.declare_parameter("map_frame_id", "map")
         self.declare_parameter("base_link_frame_id", "base_link")
+        # Also publish base_link -> ft_sensor so map and ft_sensor become connected.
+        # Defaults match the ROS1 launch static TF used in control_stack_base.
+        self.declare_parameter("sensor_offset_x", 0.0)
+        self.declare_parameter("sensor_offset_y", 0.0)
+        self.declare_parameter("sensor_offset_z", -0.3)
+        self.declare_parameter("sensor_roll", 0.0)
+        self.declare_parameter("sensor_pitch", 1.57079632679)
+        self.declare_parameter("sensor_yaw", 0.0)
 
         force_topic = self.get_parameter("force_topic").value
         self.force_threshold = self.get_parameter("force_threshold").value
@@ -78,6 +86,12 @@ class WallContactTester(Node):
         loop_rate = self.get_parameter("loop_rate").value
         self.map_frame_id = self.get_parameter("map_frame_id").value
         self.base_link_frame_id = self.get_parameter("base_link_frame_id").value
+        self.sensor_offset_x = self.get_parameter("sensor_offset_x").value
+        self.sensor_offset_y = self.get_parameter("sensor_offset_y").value
+        self.sensor_offset_z = self.get_parameter("sensor_offset_z").value
+        self.sensor_roll = self.get_parameter("sensor_roll").value
+        self.sensor_pitch = self.get_parameter("sensor_pitch").value
+        self.sensor_yaw = self.get_parameter("sensor_yaw").value
 
         # --------------- MAVROS publishers / subscribers --------------- #
         state_qos = QoSProfile(
@@ -166,6 +180,7 @@ class WallContactTester(Node):
 
     def _loop(self) -> None:
         self._publish_map_to_base_link_tf()
+        self._publish_base_to_sensor_tf()
         if self.state == TestState.PREFLIGHT:
             self._step_preflight()
         elif self.state == TestState.TAKEOFF:
@@ -365,6 +380,36 @@ class WallContactTester(Node):
             and t.transform.rotation.w == 0.0
         ):
             return
+
+        self.tf_broadcaster.sendTransform(t)
+
+    def _publish_base_to_sensor_tf(self) -> None:
+        """Broadcast static `base_link -> ft_sensor` transform.
+
+        Wrench controller requires map<-ft_sensor lookup. With map->base_link
+        and this static link, the TF chain becomes connected.
+        """
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = self.base_link_frame_id
+        t.child_frame_id = self.sensor_frame
+
+        t.transform.translation.x = float(self.sensor_offset_x)
+        t.transform.translation.y = float(self.sensor_offset_y)
+        t.transform.translation.z = float(self.sensor_offset_z)
+
+        # Convert RPY to quaternion.
+        cr = math.cos(self.sensor_roll * 0.5)
+        sr = math.sin(self.sensor_roll * 0.5)
+        cp = math.cos(self.sensor_pitch * 0.5)
+        sp = math.sin(self.sensor_pitch * 0.5)
+        cy = math.cos(self.sensor_yaw * 0.5)
+        sy = math.sin(self.sensor_yaw * 0.5)
+
+        t.transform.rotation.w = float(cr * cp * cy + sr * sp * sy)
+        t.transform.rotation.x = float(sr * cp * cy - cr * sp * sy)
+        t.transform.rotation.y = float(cr * sp * cy + sr * cp * sy)
+        t.transform.rotation.z = float(cr * cp * sy - sr * sp * cy)
 
         self.tf_broadcaster.sendTransform(t)
 
