@@ -1,10 +1,30 @@
 # Gazebo-only overrides (control_stack_base loads pose + wrench gazebo YAML in ns wrench_controller).
-# Keep simulation-specific force loop tuning here.
+# Wall-contact: softer fz + milder pose z reduces thrust fighting and altitude drops before/after contact.
 
 wrench_controller:
   ros__parameters:
-    # Softer X force loop than bare wrench_px4_params if contact oscillates in Gazebo
-    fx.P: 0.02
-    fx.D: 0.01
-    fx.min: -0.15
-    fx.max: 0.15
+    # Sim: allow full normalized collective so pose+wrench mix does not pin |T| at a low cap.
+    thrust_max: 1.0
+    # 必须写 0.0 等非整型字面量；整数 0 会与 declare_parameter<double>(hover_thrust) 冲突并 abort
+    hover_thrust: 0.58
+
+    # Softer normal force loop (x) + weaker fz so vertical force PID does not steal collective from hover
+    fx.P: 0.012
+    fx.D: 0.010
+    fx.min: -0.10
+    fx.max: 0.10
+    fz.P: 0.0006
+    fz.I: 0.002
+    fz.D: 0.00015
+    fz.min: -0.45
+    fz.max: 0.45
+
+    # Use floats (0.0 not 0) for vector<double> params; integer 0 can break rclcpp typing.
+    pose_controller:
+      P: [0.12, 0.12, 0.20]
+      I: [0.06, 0.06, 0.0]
+      D: [0.14, 0.14, 0.12]
+      FF: [0.0, 0.0, 0.0]
+      integral_threshold: [0.5, 0.5, 5.0]
+      min: [-0.3, -0.3, -0.5]
+      max: [0.3, 0.3, 0.5]

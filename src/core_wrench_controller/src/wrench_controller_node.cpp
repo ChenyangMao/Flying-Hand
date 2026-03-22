@@ -312,6 +312,11 @@ bool WrenchControlNode::execute()
     }
   }
 
+  // Apply same tilt + magnitude limits as pose-only path. Mixed wrench+pose thrust was not
+  // passed through calculate_thrust(); without this, map-frame thrust can exceed thrust_max
+  // inconsistently, or mixed vectors need a single cap matching PX4Interface expectations.
+  pose_controller_->constrain_thrust(thrust_des);
+
   // Publish debug thrust vector (optional)
   if (thrust_debug_pub_) {
     geometry_msgs::msg::Vector3Stamped thrust_des_msg;
