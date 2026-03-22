@@ -18,6 +18,7 @@ find_package(mav_msgs REQUIRED)
 find_package(base_main_class REQUIRED)
 find_package(core_pid_controller REQUIRED)
 find_package(core_pose_controller REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 # WrenchController library (uses core_pid_controller)
 add_library(wrench_controller_lib SHARED
@@ -39,6 +40,7 @@ add_executable(wrench_controller
 )
 target_include_directories(wrench_controller PRIVATE
   include
+  ${Eigen3_INCLUDE_DIRS}
   ${CMAKE_CURRENT_SOURCE_DIR}/../core_pose_controller/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../base_main_class/include
 )

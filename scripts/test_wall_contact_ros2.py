@@ -2,10 +2,16 @@
 """
 Wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
-This script arms the drone, enters OFFBOARD mode, and uses MAVROS velocity
-setpoints to approach a wall.  After contact is detected via FT data, it
+This script arms the drone, enters OFFBOARD mode, approaches a wall, then
 switches the wrench controller to force-control mode and holds a constant
 desired force for a configurable duration.
+
+By default it uses MAVROS velocity setpoints for takeoff and approach; after
+contact, OFFBOARD is fed by ``attitude_thrust_command`` (wrench →
+drone_interface → MAVROS).  Set ``use_attitude_offboard_only`` to true to use
+``tracking_point`` + wrench pose control for takeoff/approach as well, so PX4
+only receives attitude/thrust setpoints after arming (preflight still sends
+zero velocity setpoints until OFFBOARD is engaged — PX4 requirement).
 
 Required running processes:
   1. PX4 SITL (make px4_sitl gz_hexa_scorpion)
@@ -21,7 +27,7 @@ Usage:
 
 import math
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
@@ -73,6 +79,10 @@ class WallContactTester(Node):
         self.declare_parameter("sensor_roll", 0.0)
         self.declare_parameter("sensor_pitch", 1.57079632679)
         self.declare_parameter("sensor_yaw", 0.0)
+        # If true: after arming, do not publish mavros/setpoint_velocity/cmd_vel;
+        # use tracking_point + core_wrench_controller pose loop for takeoff/approach.
+        # Preflight still publishes zero velocity until OFFBOARD (PX4 requirement).
+        self.declare_parameter("use_attitude_offboard_only", False)
 
         force_topic = self.get_parameter("force_topic").value
         self.force_threshold = self.get_parameter("force_threshold").value
@@ -92,6 +102,9 @@ class WallContactTester(Node):
         self.sensor_roll = self.get_parameter("sensor_roll").value
         self.sensor_pitch = self.get_parameter("sensor_pitch").value
         self.sensor_yaw = self.get_parameter("sensor_yaw").value
+        self.use_attitude_offboard_only = self.get_parameter(
+            "use_attitude_offboard_only"
+        ).value
 
         # --------------- MAVROS publishers / subscribers --------------- #
         state_qos = QoSProfile(
@@ -143,6 +156,9 @@ class WallContactTester(Node):
         self.last_force_norm: float = 0.0
         self.contact_time: Optional[Time] = None
         self.hold_odom: Optional[Odometry] = None  # snapshot of odom at contact
+        self._takeoff_xy_ref: Optional[Tuple[float, float]] = None
+        self._approach_t0: Optional[Time] = None
+        self._approach_x0: float = 0.0
         self._arm_requested = False
         self._offboard_requested = False
         self._preflight_log_timer = 0
@@ -155,7 +171,8 @@ class WallContactTester(Node):
             f"WallContactTester started. force_topic='{force_topic}', "
             f"approach_vel={self.approach_velocity:.2f} m/s, "
             f"threshold={self.force_threshold:.1f} N, "
-            f"desired_force={self.desired_force:.1f} N ({self.desired_force_axis.upper()})."
+            f"desired_force={self.desired_force:.1f} N ({self.desired_force_axis.upper()}), "
+            f"use_attitude_offboard_only={self.use_attitude_offboard_only}."
         )
 
     # ------------------------------------------------------------------ #
@@ -190,9 +207,11 @@ class WallContactTester(Node):
         elif self.state == TestState.HOLD_FORCE:
             self._step_hold_force()
         elif self.state == TestState.DONE:
-            self._publish_velocity(0.0, 0.0, 0.0)
-            self.get_logger().info("Test done. Hovering. Ctrl+C to exit.",
-                                   throttle_duration_sec=5.0)
+            self._publish_done_hold()
+            self.get_logger().info(
+                f"Test done. Hovering at alt={self.current_alt:.2f}m. Ctrl+C to exit.",
+                throttle_duration_sec=5.0,
+            )
 
     # ------------------------------------------------------------------ #
     # PREFLIGHT: wait for MAVROS connection, arm, OFFBOARD
@@ -255,6 +274,11 @@ class WallContactTester(Node):
         self.get_logger().info(
             f"Drone armed and in OFFBOARD mode. Taking off to {self.takeoff_alt:.1f}m...")
         self.state = TestState.TAKEOFF
+        if self.last_odom is not None:
+            self._takeoff_xy_ref = (
+                float(self.last_odom.pose.pose.position.x),
+                float(self.last_odom.pose.pose.position.y),
+            )
 
     # ------------------------------------------------------------------ #
     # TAKEOFF: climb to target altitude
@@ -267,13 +291,19 @@ class WallContactTester(Node):
             self.state = TestState.PREFLIGHT
             return
 
-        self._publish_velocity(0.0, 0.0, self.takeoff_vel)
+        if self.use_attitude_offboard_only:
+            self._publish_tracking_takeoff()
+        else:
+            self._publish_velocity(0.0, 0.0, self.takeoff_vel)
 
         if self.current_alt >= self.takeoff_alt * 0.95:
             self.get_logger().info(
                 f"Reached altitude {self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m). "
                 "Starting approach.")
             self.state = TestState.APPROACH
+            self._approach_t0 = self.get_clock().now()
+            if self.last_odom is not None:
+                self._approach_x0 = float(self.last_odom.pose.pose.position.x)
         else:
             self.get_logger().info(
                 f"Taking off... alt={self.current_alt:.2f}/{self.takeoff_alt:.1f}m",
@@ -285,7 +315,10 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_approach(self) -> None:
-        self._publish_velocity(self.approach_velocity, 0.0, 0.0)
+        if self.use_attitude_offboard_only:
+            self._publish_tracking_approach()
+        else:
+            self._publish_velocity(self.approach_velocity, 0.0, 0.0)
 
         if self.last_force_msg is None:
             return
@@ -293,7 +326,8 @@ class WallContactTester(Node):
         if self.last_force_norm > self.force_threshold:
             self.get_logger().info(
                 f"Contact detected! |F|={self.last_force_norm:.3f} N "
-                f"(threshold={self.force_threshold:.1f} N)")
+                f"(threshold={self.force_threshold:.1f} N)  "
+                f"alt={self.current_alt:.2f}m")
             # Snapshot current pose as the hold position for pose controller
             self.hold_odom = self.last_odom
             self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
@@ -323,7 +357,14 @@ class WallContactTester(Node):
 
         elapsed = (self.get_clock().now() - self.contact_time).nanoseconds * 1e-9
         if self.last_force_msg is not None:
-            log_msg = f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  |F|={self.last_force_norm:.3f} N"
+            log_msg = (
+                f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  "
+                f"alt={self.current_alt:.2f}m"
+            )
+            if self.hold_odom is not None:
+                z_ref = float(self.hold_odom.pose.pose.position.z)
+                log_msg += f"  z_sp={z_ref:.2f}m"
+            log_msg += f"  |F|={self.last_force_norm:.3f} N"
             if self.last_attitude_thrust is not None:
                 t = self.last_attitude_thrust.thrust
                 q = self.last_attitude_thrust.attitude
@@ -426,6 +467,59 @@ class WallContactTester(Node):
         msg.pose = self.hold_odom.pose
         # Zero velocity target (hold position)
         self.tracking_point_pub.publish(msg)
+
+    def _publish_tracking_takeoff(self) -> None:
+        """Pose-based takeoff: climb to takeoff_alt at fixed XY (snapshot at TAKEOFF)."""
+        if self.last_odom is None:
+            return
+        if self._takeoff_xy_ref is None:
+            self._takeoff_xy_ref = (
+                float(self.last_odom.pose.pose.position.x),
+                float(self.last_odom.pose.pose.position.y),
+            )
+        tx, ty = self._takeoff_xy_ref
+        msg = self._make_tracking_odometry(tx, ty, float(self.takeoff_alt))
+        self.tracking_point_pub.publish(msg)
+
+    def _publish_tracking_approach(self) -> None:
+        """Pose-based approach: ramp target X forward at approach_velocity."""
+        if self.last_odom is None or self._approach_t0 is None:
+            return
+        elapsed = (self.get_clock().now() - self._approach_t0).nanoseconds * 1e-9
+        target_x = self._approach_x0 + self.approach_velocity * elapsed
+        py = float(self.last_odom.pose.pose.position.y)
+        msg = self._make_tracking_odometry(target_x, py, float(self.takeoff_alt))
+        self.tracking_point_pub.publish(msg)
+
+    def _publish_done_hold(self) -> None:
+        """After test: hover hold. Velocity mode keeps zero cmd_vel; attitude mode
+        holds current pose as tracking target."""
+        if self.use_attitude_offboard_only:
+            if self.last_odom is not None:
+                p = self.last_odom.pose.pose.position
+                msg = self._make_tracking_odometry(
+                    float(p.x), float(p.y), float(p.z))
+                self.tracking_point_pub.publish(msg)
+        else:
+            self._publish_velocity(0.0, 0.0, 0.0)
+
+    def _make_tracking_odometry(
+        self, target_x: float, target_y: float, target_z: float
+    ) -> Odometry:
+        msg = Odometry()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        if self.last_odom is not None:
+            msg.header.frame_id = self.last_odom.header.frame_id
+            msg.child_frame_id = self.last_odom.child_frame_id
+            msg.pose.pose.orientation = self.last_odom.pose.pose.orientation
+        else:
+            msg.header.frame_id = self.map_frame_id
+            msg.child_frame_id = self.base_link_frame_id
+            msg.pose.pose.orientation.w = 1.0
+        msg.pose.pose.position.x = target_x
+        msg.pose.pose.position.y = target_y
+        msg.pose.pose.position.z = target_z
+        return msg
 
     def _publish_velocity(self, vx: float, vy: float, vz: float) -> None:
         msg = TwistStamped()

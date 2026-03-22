@@ -1,5 +1,11 @@
 #include "wrench_controller/wrench_controller_node.hpp"
 
+#include <array>
+#include <limits>
+#include <vector>
+
+#include <Eigen/Dense>
+
 #include <tf2/LinearMath/Transform.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -151,6 +157,43 @@ bool WrenchControlNode::initialize()
     max_tilt_deg,
     hover_thrust);
 
+  auto get_vec3 = [this](const std::string & name, const std::array<double, 3> & defaults)
+    -> Eigen::Vector3d {
+    std::vector<double> vals =
+      this->declare_parameter<std::vector<double>>(
+      name, {defaults[0], defaults[1], defaults[2]});
+    if (vals.size() < 3) {
+      vals.resize(3, 0.0);
+    }
+    return Eigen::Vector3d(vals[0], vals[1], vals[2]);
+  };
+
+  // Tuned values: config/wrench_px4_params.yaml (and gazebo overlay) under pose_controller/.
+  // Defaults below are only fallbacks if a key is missing from YAML (ROS2 declare_parameter).
+  const std::array<double, 3> z3 = {0.0, 0.0, 0.0};
+  const double lim_lo = std::numeric_limits<double>::lowest();
+  const double lim_hi = std::numeric_limits<double>::max();
+  const std::array<double, 3> min_fallback = {lim_lo, lim_lo, lim_lo};
+  const std::array<double, 3> max_fallback = {lim_hi, lim_hi, lim_hi};
+
+  Eigen::Vector3d pose_P = get_vec3("pose_controller.P", z3);
+  Eigen::Vector3d pose_I = get_vec3("pose_controller.I", z3);
+  Eigen::Vector3d pose_D = get_vec3("pose_controller.D", z3);
+  Eigen::Vector3d pose_FF = get_vec3("pose_controller.FF", z3);
+  Eigen::Vector3d pose_integral_threshold =
+    get_vec3("pose_controller.integral_threshold", z3);
+  Eigen::Vector3d pose_minimum = get_vec3("pose_controller.min", min_fallback);
+  Eigen::Vector3d pose_maximum = get_vec3("pose_controller.max", max_fallback);
+
+  pose_controller_->configure_gains(
+    pose_P, pose_I, pose_D, pose_FF, pose_integral_threshold, pose_minimum, pose_maximum);
+
+  RCLCPP_INFO(
+    this->get_logger(),
+    "PoseController gains: P=(%.3f,%.3f,%.3f) D=(%.3f,%.3f,%.3f)",
+    pose_P.x(), pose_P.y(), pose_P.z(),
+    pose_D.x(), pose_D.y(), pose_D.z());
+
   // Create publishers and subscribers that are already known / straightforward to migrate.
   // Command publisher (mav_msgs::msg::AttitudeThrust)
   command_pub_ = this->create_publisher<mav_msgs::msg::AttitudeThrust>(
@@ -248,31 +291,24 @@ bool WrenchControlNode::execute()
         this->get_logger(),
         *this->get_clock(),
         1000,
-        "Motion-force branch skipped: calculate_thrust_torque() returned false.");
-      return true;
-    }
+        "calculate_thrust_torque() false; publishing pose-only thrust (check FT/setpoint).");
+      thrust_des = thrust_pose_des;
+    } else {
+      tf2::Matrix3x3 vel_mat(
+        0.7, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0);
+      tf2::Vector3 contact_normal(-1.0, 0.0, 0.0);
+      tf2::Vector3 force_constraint_vec(0.0, 0.0, 0.0);
 
-    tf2::Matrix3x3 vel_mat(
-      0.7, 0.0, 0.0,
-      0.0, 1.0, 0.0,
-      0.0, 0.0, 1.0);
-    tf2::Vector3 contact_normal(-1.0, 0.0, 0.0);
-    tf2::Vector3 force_constraint_vec(0.0, 0.0, 0.0);
-
-    if (!combine_motion_and_force(
+      combine_motion_and_force(
         thrust_wrench_des,
         thrust_pose_des,
         contact_normal,
         vel_mat,
         force_constraint_vec,
         this->get_parameter("target_frame").as_string(),
-        thrust_des)) {
-      RCLCPP_WARN_THROTTLE(
-        this->get_logger(),
-        *this->get_clock(),
-        1000,
-        "Motion-force branch skipped: combine_motion_and_force() returned false.");
-      return true;
+        thrust_des);
     }
   }
 
@@ -374,8 +410,22 @@ bool WrenchControlNode::combine_motion_and_force(
     }
 
     return true;
-  } catch (const tf2::TransformException &) {
-    return false;
+  } catch (const tf2::TransformException & ex) {
+    // Without contact TF, the mix cannot run; sum thrusts in map frame so we still publish.
+    (void)ex;
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(),
+      *this->get_clock(),
+      5000,
+      "combine_motion_and_force: TF map<->contact failed; using thrust_force + thrust_motion. "
+      "Launch static TF map->contact (see wrench_controller_gazebo.launch.py).");
+    out_thrust_des = thrust_force + thrust_motion;
+    if (pose_controller_) {
+      tf2::Vector3 thrust_h_des = pose_controller_->constrain_horizontal_thrust(out_thrust_des);
+      out_thrust_des.setX(thrust_h_des.x());
+      out_thrust_des.setY(thrust_h_des.y());
+    }
+    return true;
   }
 }
 
@@ -430,10 +480,16 @@ void WrenchControlNode::switch_callback(
   const std_msgs::msg::Bool::SharedPtr msg)
 {
   mode_switch_ = msg->data;
-  RCLCPP_INFO(
-    this->get_logger(),
-    "Mode switch changed: motion-force control %s",
-    mode_switch_ ? "ENABLED" : "DISABLED");
+  if (!mode_switch_) {
+    RCLCPP_INFO(this->get_logger(), "Switching to pose control mode.");
+  } else {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Switching to motion-force control mode (reset wrench integrators).");
+    if (wrench_controller_) {
+      wrench_controller_->reset();
+    }
+  }
 }
 
 }  // namespace wrench_controller

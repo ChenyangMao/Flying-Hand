@@ -1,6 +1,10 @@
-# YAML File for Wrench Controller Parameters for PX4-based UAVs in Gazebo Simulation Environment
-# This file should keep only the parameters that are additional to wrench_px4_params.yaml
-# or have different values than the real drone using the wrench_px4_params.yaml file.
+# Gazebo-only overrides (control_stack_base loads pose + wrench gazebo YAML in ns wrench_controller).
+# Keep simulation-specific force loop tuning here.
 
 wrench_controller:
-  ros__parameters: {}
+  ros__parameters:
+    # Softer X force loop than bare wrench_px4_params if contact oscillates in Gazebo
+    fx.P: 0.02
+    fx.D: 0.01
+    fx.min: -0.15
+    fx.max: 0.15
