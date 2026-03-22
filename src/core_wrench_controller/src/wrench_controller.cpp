@@ -304,10 +304,18 @@ void WrenchController::reset()
   got_ft_data_ = false;
 }
 
-void WrenchController::configure_fx(double p, double d, double minimum, double maximum)
+void WrenchController::configure_fx(
+  double p,
+  double i,
+  double d,
+  double integral_threshold,
+  double minimum,
+  double maximum)
 {
   fx_controller_.set_P(p);
+  fx_controller_.set_I(i);
   fx_controller_.set_D(d);
+  fx_controller_.set_integral_threshold(integral_threshold);
   fx_controller_.set_minimum(minimum);
   fx_controller_.set_maximum(maximum);
 }

@@ -3,9 +3,11 @@
 Wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
 This script arms the drone, enters OFFBOARD mode, approaches a wall, then
-switches the wrench controller to force-control mode and holds a constant
-desired force for a configurable duration. After that it retreats (-X),
-descends, and disarms (see ``retreat_*`` / ``land_*`` parameters).
+switches the wrench controller to force-control mode. The run ends the hold
+phase after **net** contact force stays within ``desired_force ± force_hold_tolerance``
+**continuously** for ``hold_time`` seconds (not merely ``hold_time`` after switching
+to force control). Then it retreats (-X), descends, and disarms (see ``retreat_*``
+/ ``land_*`` parameters).
 
 By default it uses MAVROS velocity setpoints for takeoff and approach; after
 contact, OFFBOARD is fed by ``attitude_thrust_command`` (wrench →
@@ -15,10 +17,21 @@ only receives attitude/thrust setpoints after arming (preflight still sends
 zero velocity setpoints until OFFBOARD is engaged — PX4 requirement).
 
 Tuning (aligned with ``control_stack_base`` spirit: gentle contact, avoid
-saturation): keep ``desired_force`` modest (e.g. 1–3 N), ``approach_velocity``
-small (e.g. 0.05–0.12 m/s), and optionally ``takeoff_altitude`` near 1.5 m
-like ``scripts/test_wall_contact.py`` (``CONTACT_PUSH_SPEED`` there is 0.05 m/s
-for post-contact motion). Raise aggressiveness only after stable holds.
+saturation): keep ``desired_force`` (a **net** setpoint in N, excluding the
+sensor idle bias) modest, ``approach_velocity`` small (e.g. 0.05–0.12 m/s), and
+optionally ``takeoff_altitude`` near 1.5 m like ``scripts/test_wall_contact.py``.
+After takeoff, the script hovers at target height for ``pre_approach_hold_sec``
+(default 2 s), then approaches; in velocity OFFBOARD mode it also feeds a small
+``vz`` from ``approach_altitude_kp`` to hold altitude while moving forward.
+
+Force convention: ``force_baseline_magnitude`` is subtracted from the **contact
+axis** component ``|F_axis|`` (not from ``|F|``), so net force is not polluted by
+side components. Enter force-control when ``max(0, |F_axis|-baseline)`` exceeds
+``force_threshold``. ``ft_setpoint`` is **net + baseline** on that axis.
+
+During ``HOLD_FORCE``, ``tracking_point`` keeps **XY** at the contact snapshot but
+**Z = takeoff_altitude** so the internal pose loop fights sag/drop like the
+approach phase (frozen contact-Z caused steady altitude loss in sim).
 
 Required running processes:
   1. PX4 SITL (make px4_sitl gz_hexa_scorpion)
@@ -53,6 +66,7 @@ from tf2_ros import TransformBroadcaster
 class TestState(Enum):
     PREFLIGHT = auto()
     TAKEOFF = auto()
+    HOVER_ALT = auto()  # 起飞到位后悬停，稳定高度再开始接近墙
     APPROACH = auto()
     HOLD_FORCE = auto()
     RETREAT = auto()  # 后退离墙
@@ -67,15 +81,29 @@ class WallContactTester(Node):
 
         # --------------- parameters --------------- #
         self.declare_parameter("force_topic", "ft_data_filtered")
+        # Typical |F| when not touching the wall (subtracted to get net force).
+        self.declare_parameter("force_baseline_magnitude", 0.98)
+        # Enter force control when net |F| exceeds this (N). Default 1.0 N above idle bias.
         self.declare_parameter("force_threshold", 1.0)
-        # Start low; raise via -p desired_force:=... once stable (5 N is often too aggressive in sim).
-        self.declare_parameter("desired_force", 1.0)
+        # Net desired contact force (N), excluding baseline; published to ft_setpoint as net + baseline.
+        # Net normal force (N); default 1.5 N is easier to reach in SITL than 2 N — raise when tuned.
+        self.declare_parameter("desired_force", 1.5)
         self.declare_parameter("desired_force_axis", "x")
-        self.declare_parameter("approach_velocity", 0.05)
+        self.declare_parameter("approach_velocity", 0.1)
+        # 净力在 [desired_force ± force_hold_tolerance] 内连续保持的秒数，满则进入后退
         self.declare_parameter("hold_time", 10.0)
+        # Band |net - desired| <= tol; wider default so “hold 10 s in band” can finish in sim.
+        self.declare_parameter("force_hold_tolerance", 1.2)
+        # Safety: max total seconds in HOLD_FORCE before giving up (0 = no limit).
+        self.declare_parameter("max_hold_timeout", 90.0)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.5)
         self.declare_parameter("takeoff_velocity", 0.5)
+        # 到达起飞高度后悬停若干秒，再开始飞向墙（0 表示几乎不等待）
+        self.declare_parameter("pre_approach_hold_sec", 2.0)
+        # 速度模式接近墙时：用 vz 补偿高度误差，保持接近目标高度
+        self.declare_parameter("approach_altitude_kp", 0.8)
+        self.declare_parameter("approach_vz_limit", 0.35)
         self.declare_parameter("loop_rate", 50.0)
         # Pose controller uses TF to compute thrust. In some setups, `map` and
         # `base_link` might be in different TF trees; bridge them here.
@@ -87,7 +115,8 @@ class WallContactTester(Node):
         self.declare_parameter("sensor_offset_y", 0.0)
         self.declare_parameter("sensor_offset_z", -0.3)
         self.declare_parameter("sensor_roll", 0.0)
-        self.declare_parameter("sensor_pitch", 1.57079632679)
+        # π/2 was for control_stack_base Z-push; wall contact along X needs pitch=0.
+        self.declare_parameter("sensor_pitch", 0.0)
         self.declare_parameter("sensor_yaw", 0.0)
         # If true: after arming, do not publish mavros/setpoint_velocity/cmd_vel;
         # use tracking_point + core_wrench_controller pose loop for takeoff/approach.
@@ -100,14 +129,30 @@ class WallContactTester(Node):
         self.declare_parameter("land_alt_threshold", 0.12)
 
         force_topic = self.get_parameter("force_topic").value
-        self.force_threshold = self.get_parameter("force_threshold").value
-        self.desired_force = self.get_parameter("desired_force").value
+        self.force_baseline_magnitude = float(
+            self.get_parameter("force_baseline_magnitude").value
+        )
+        self.force_threshold = float(self.get_parameter("force_threshold").value)
+        self.desired_force = float(self.get_parameter("desired_force").value)
         self.desired_force_axis = self.get_parameter("desired_force_axis").value.lower()
         self.approach_velocity = self.get_parameter("approach_velocity").value
-        self.hold_time = self.get_parameter("hold_time").value
+        self.hold_time = float(self.get_parameter("hold_time").value)
+        self.force_hold_tolerance = float(
+            self.get_parameter("force_hold_tolerance").value
+        )
+        self.max_hold_timeout = float(
+            self.get_parameter("max_hold_timeout").value
+        )
         self.sensor_frame = self.get_parameter("sensor_frame").value
         self.takeoff_alt = self.get_parameter("takeoff_altitude").value
         self.takeoff_vel = self.get_parameter("takeoff_velocity").value
+        self.pre_approach_hold_sec = float(
+            self.get_parameter("pre_approach_hold_sec").value
+        )
+        self.approach_altitude_kp = float(
+            self.get_parameter("approach_altitude_kp").value
+        )
+        self.approach_vz_limit = float(self.get_parameter("approach_vz_limit").value)
         loop_rate = self.get_parameter("loop_rate").value
         self.map_frame_id = self.get_parameter("map_frame_id").value
         self.base_link_frame_id = self.get_parameter("base_link_frame_id").value
@@ -173,9 +218,14 @@ class WallContactTester(Node):
         self.state = TestState.PREFLIGHT
         self.last_force_msg: Optional[WrenchStamped] = None
         self.last_force_norm: float = 0.0
+        self.last_force_axis_abs: float = 0.0
+        self.last_force_net: float = 0.0
         self.contact_time: Optional[Time] = None
+        self._in_band_since: Optional[Time] = None  # 净力在目标带内的连续计时起点
         self.hold_odom: Optional[Odometry] = None  # snapshot of odom at contact
         self._takeoff_xy_ref: Optional[Tuple[float, float]] = None
+        self._hover_t0: Optional[Time] = None
+        self._hover_xy_ref: Optional[Tuple[float, float]] = None
         self._approach_t0: Optional[Time] = None
         self._approach_x0: float = 0.0
         self._arm_requested = False
@@ -192,11 +242,17 @@ class WallContactTester(Node):
         period = 1.0 / loop_rate if loop_rate > 0 else 0.02
         self.timer = self.create_timer(period, self._loop)
 
+        sp_raw = self.desired_force + self.force_baseline_magnitude
         self.get_logger().info(
             f"WallContactTester started. force_topic='{force_topic}', "
             f"approach_vel={self.approach_velocity:.2f} m/s, "
-            f"threshold={self.force_threshold:.1f} N, "
-            f"desired_force={self.desired_force:.1f} N ({self.desired_force_axis.upper()}), "
+            f"|F|_baseline={self.force_baseline_magnitude:.2f} N, "
+            f"net_contact_threshold={self.force_threshold:.2f} N, "
+            f"desired_force_net={self.desired_force:.1f} N ({self.desired_force_axis.upper()}) "
+            f"→ ft_setpoint_raw≈{sp_raw:.2f} N, "
+            f"pre_approach_hold={self.pre_approach_hold_sec:.1f}s, "
+            f"hold: {self.hold_time:.1f}s within net "
+            f"{self.desired_force:.1f}±{self.force_hold_tolerance:.2f} N, "
             f"use_attitude_offboard_only={self.use_attitude_offboard_only}."
         )
 
@@ -215,6 +271,9 @@ class WallContactTester(Node):
         self.last_force_msg = msg
         f = msg.wrench.force
         self.last_force_norm = math.sqrt(f.x**2 + f.y**2 + f.z**2)
+        ax = self._force_axis_abs(f, self.desired_force_axis)
+        self.last_force_axis_abs = ax
+        self.last_force_net = max(0.0, ax - self.force_baseline_magnitude)
 
     # ------------------------------------------------------------------ #
     # Main loop
@@ -223,10 +282,13 @@ class WallContactTester(Node):
     def _loop(self) -> None:
         self._publish_map_to_base_link_tf()
         self._publish_base_to_sensor_tf()
+        self._publish_map_to_contact_tf()
         if self.state == TestState.PREFLIGHT:
             self._step_preflight()
         elif self.state == TestState.TAKEOFF:
             self._step_takeoff()
+        elif self.state == TestState.HOVER_ALT:
+            self._step_hover_alt()
         elif self.state == TestState.APPROACH:
             self._step_approach()
         elif self.state == TestState.HOLD_FORCE:
@@ -324,16 +386,55 @@ class WallContactTester(Node):
         if self.current_alt >= self.takeoff_alt * 0.95:
             self.get_logger().info(
                 f"Reached altitude {self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m). "
-                "Starting approach.")
-            self.state = TestState.APPROACH
-            self._approach_t0 = self.get_clock().now()
+                f"Hovering {self.pre_approach_hold_sec:.1f}s to stabilize before approach.")
+            self.state = TestState.HOVER_ALT
+            self._hover_t0 = self.get_clock().now()
             if self.last_odom is not None:
-                self._approach_x0 = float(self.last_odom.pose.pose.position.x)
+                self._hover_xy_ref = (
+                    float(self.last_odom.pose.pose.position.x),
+                    float(self.last_odom.pose.pose.position.y),
+                )
         else:
             self.get_logger().info(
                 f"Taking off... alt={self.current_alt:.2f}/{self.takeoff_alt:.1f}m",
                 throttle_duration_sec=1.0,
             )
+
+    # ------------------------------------------------------------------ #
+    # HOVER_ALT: hold altitude (and XY) before moving toward the wall
+    # ------------------------------------------------------------------ #
+
+    def _step_hover_alt(self) -> None:
+        if not self.mavros_state or not self.mavros_state.armed:
+            self.get_logger().warn("Lost arm during hover, re-arming...")
+            self._arm_requested = False
+            self.state = TestState.PREFLIGHT
+            return
+
+        if self._hover_t0 is None:
+            self._hover_t0 = self.get_clock().now()
+
+        if self.use_attitude_offboard_only:
+            self._publish_tracking_hover_alt()
+        else:
+            vz = self._altitude_hold_vz(self.takeoff_alt)
+            self._publish_velocity(0.0, 0.0, vz)
+
+        elapsed = (self.get_clock().now() - self._hover_t0).nanoseconds * 1e-9
+        self.get_logger().info(
+            f"Pre-approach hover {elapsed:.1f}/{self.pre_approach_hold_sec:.1f}s  "
+            f"alt={self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m)",
+            throttle_duration_sec=1.0,
+        )
+
+        if elapsed >= self.pre_approach_hold_sec:
+            self.get_logger().info(
+                f"Hover done. Approaching wall at {self.approach_velocity:.2f} m/s."
+            )
+            self.state = TestState.APPROACH
+            self._approach_t0 = self.get_clock().now()
+            if self.last_odom is not None:
+                self._approach_x0 = float(self.last_odom.pose.pose.position.x)
 
     # ------------------------------------------------------------------ #
     # APPROACH: fly forward until contact
@@ -343,21 +444,26 @@ class WallContactTester(Node):
         if self.use_attitude_offboard_only:
             self._publish_tracking_approach()
         else:
-            self._publish_velocity(self.approach_velocity, 0.0, 0.0)
+            vz = self._altitude_hold_vz(self.takeoff_alt)
+            self._publish_velocity(self.approach_velocity, 0.0, vz)
 
         if self.last_force_msg is None:
             return
 
-        if self.last_force_norm > self.force_threshold:
+        if self.last_force_net > self.force_threshold:
             self.get_logger().info(
                 f"Contact detected! |F|={self.last_force_norm:.3f} N "
-                f"(threshold={self.force_threshold:.1f} N)  "
+                f"|F_{self.desired_force_axis}|={self.last_force_axis_abs:.3f} N "
+                f"net_axis={self.last_force_net:.3f} N "
+                f"(threshold={self.force_threshold:.2f} N, "
+                f"baseline={self.force_baseline_magnitude:.2f} N)  "
                 f"alt={self.current_alt:.2f}m")
             # Snapshot current pose as the hold position for pose controller
             self.hold_odom = self.last_odom
             self._publish_wrench_setpoint(self.desired_force, self.desired_force_axis)
             self._set_wrench_switch(True)
             self.contact_time = self.get_clock().now()
+            self._in_band_since = None
             self.get_logger().info(
                 "Switched to force control. Wrench controller now commands attitude/thrust.")
             self._log_attitude_thrust()
@@ -368,14 +474,13 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_hold_force(self) -> None:
-        # Velocity OFFBOARD: must keep publishing setpoints. Approach was sending vx>0;
-        # if we stop here, PX4 can keep blending old velocity with wrench attitude/thrust
-        # and altitude collapses. Zero velocity every tick while wrench commands thrust.
+        # Velocity OFFBOARD: keep streaming setpoints; vx/vy=0, vz holds altitude toward
+        # takeoff_alt (same P gain as approach) so PX4 does not sag while wrench commands thrust.
         if not self.use_attitude_offboard_only:
-            self._publish_velocity(0.0, 0.0, 0.0)
+            vz = self._altitude_hold_vz(self.takeoff_alt)
+            self._publish_velocity(0.0, 0.0, vz)
 
-        # Publish tracking_point so the wrench controller's internal pose
-        # controller has a valid target.  Use the snapshot taken at contact.
+        # Pose target: XY locked at contact, Z at mission height (see _publish_tracking_point).
         self._publish_tracking_point()
 
         # Keep re-sending the wrench setpoint and switch.
@@ -384,18 +489,40 @@ class WallContactTester(Node):
 
         if self.contact_time is None:
             self.contact_time = self.get_clock().now()
-            return
+            self._in_band_since = None
 
-        elapsed = (self.get_clock().now() - self.contact_time).nanoseconds * 1e-9
+        now = self.get_clock().now()
+        t_total = (now - self.contact_time).nanoseconds * 1e-9
+
+        in_band = False
+        if self.last_force_msg is not None:
+            in_band = (
+                abs(self.last_force_net - self.desired_force)
+                <= self.force_hold_tolerance
+            )
+
+        if in_band:
+            if self._in_band_since is None:
+                self._in_band_since = now
+        else:
+            self._in_band_since = None
+
+        t_in_band = 0.0
+        if self._in_band_since is not None:
+            t_in_band = (now - self._in_band_since).nanoseconds * 1e-9
+
         if self.last_force_msg is not None:
             log_msg = (
-                f"Hold {elapsed:.1f}/{self.hold_time:.1f}s  "
+                f"Hold  t_in_band={t_in_band:.1f}/{self.hold_time:.1f}s  "
+                f"t_fc={t_total:.1f}s  in_band={in_band}  "
                 f"alt={self.current_alt:.2f}m"
             )
-            if self.hold_odom is not None:
-                z_ref = float(self.hold_odom.pose.pose.position.z)
-                log_msg += f"  z_sp={z_ref:.2f}m"
-            log_msg += f"  |F|={self.last_force_norm:.3f} N"
+            log_msg += (
+                f"  z_sp={self.takeoff_alt:.2f}m  "
+                f"|F|={self.last_force_norm:.3f}  "
+                f"|F_{self.desired_force_axis}|={self.last_force_axis_abs:.3f}  "
+                f"net_axis={self.last_force_net:.3f} N"
+            )
             if self.last_attitude_thrust is not None:
                 t = self.last_attitude_thrust.thrust
                 q = self.last_attitude_thrust.attitude
@@ -405,16 +532,31 @@ class WallContactTester(Node):
                     f"  att=(x={q.x:.3f},y={q.y:.3f},z={q.z:.3f},w={q.w:.3f})")
             self.get_logger().info(log_msg, throttle_duration_sec=1.0)
 
-        if elapsed >= self.hold_time:
+        if self._in_band_since is not None and t_in_band >= self.hold_time:
             self.get_logger().info(
-                f"Force hold completed ({self.hold_time:.1f}s). Releasing, then retreat from wall."
+                f"Force hold completed ({self.hold_time:.1f}s in band). "
+                "Releasing, then retreat from wall."
             )
-            self._set_wrench_switch(False)
-            self._publish_wrench_setpoint(0.0, self.desired_force_axis)
-            self._retreat_t0 = self.get_clock().now()
-            if self.last_odom is not None:
-                self._retreat_pose_x0 = float(self.last_odom.pose.pose.position.x)
-            self.state = TestState.RETREAT
+            self._finish_hold()
+            return
+
+        if self.max_hold_timeout > 0 and t_total >= self.max_hold_timeout:
+            self.get_logger().warn(
+                f"Hold timed out after {t_total:.1f}s (max_hold_timeout="
+                f"{self.max_hold_timeout:.0f}s) without completing "
+                f"{self.hold_time:.1f}s in-band. Aborting hold."
+            )
+            self._finish_hold()
+            return
+
+    def _finish_hold(self) -> None:
+        """Common exit from HOLD_FORCE: release wrench and transition to RETREAT."""
+        self._set_wrench_switch(False)
+        self._publish_wrench_setpoint(0.0, self.desired_force_axis)
+        self._retreat_t0 = self.get_clock().now()
+        if self.last_odom is not None:
+            self._retreat_pose_x0 = float(self.last_odom.pose.pose.position.x)
+        self.state = TestState.RETREAT
 
     def _step_retreat(self) -> None:
         """沿地图 -X 后退（接近墙时为 +X）；纯姿态模式用 tracking 斜坡，速度模式用 cmd_vel。"""
@@ -577,18 +719,26 @@ class WallContactTester(Node):
 
         self.tf_broadcaster.sendTransform(t)
 
+    def _publish_map_to_contact_tf(self) -> None:
+        """Broadcast `map -> contact` identity TF required by combine_motion_and_force.
+
+        Without this, the wrench controller falls back to simple thrust addition
+        and the vel_mat / force_mat mixing is skipped entirely.
+        """
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = self.map_frame_id
+        t.child_frame_id = "contact"
+        t.transform.rotation.w = 1.0
+        self.tf_broadcaster.sendTransform(t)
+
     def _publish_tracking_point(self) -> None:
-        """Publish the hold-position as a tracking_point for the wrench controller's
-        internal pose controller.  Also keeps PX4 OFFBOARD alive via the attitude
-        setpoint stream from wrench_controller → drone_interface → MAVROS."""
+        """Hold XY at contact; keep Z at mission altitude (same as approach) to limit drop."""
         if self.hold_odom is None:
             return
-        msg = Odometry()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.hold_odom.header.frame_id
-        msg.child_frame_id = self.hold_odom.child_frame_id
-        msg.pose = self.hold_odom.pose
-        # Zero velocity target (hold position)
+        p = self.hold_odom.pose.pose.position
+        msg = self._make_tracking_odometry(
+            float(p.x), float(p.y), float(self.takeoff_alt))
         self.tracking_point_pub.publish(msg)
 
     def _publish_tracking_takeoff(self) -> None:
@@ -602,6 +752,19 @@ class WallContactTester(Node):
             )
         tx, ty = self._takeoff_xy_ref
         msg = self._make_tracking_odometry(tx, ty, float(self.takeoff_alt))
+        self.tracking_point_pub.publish(msg)
+
+    def _publish_tracking_hover_alt(self) -> None:
+        """Pose-based pre-approach: hold XY and target altitude before ramping X."""
+        if self.last_odom is None:
+            return
+        if self._hover_xy_ref is None:
+            self._hover_xy_ref = (
+                float(self.last_odom.pose.pose.position.x),
+                float(self.last_odom.pose.pose.position.y),
+            )
+        hx, hy = self._hover_xy_ref
+        msg = self._make_tracking_odometry(hx, hy, float(self.takeoff_alt))
         self.tracking_point_pub.publish(msg)
 
     def _publish_tracking_approach(self) -> None:
@@ -641,18 +804,43 @@ class WallContactTester(Node):
         msg.twist.linear.z = float(vz)
         self.vel_pub.publish(msg)
 
-    def _publish_wrench_setpoint(self, force_mag: float, axis: str) -> None:
+    @staticmethod
+    def _force_axis_abs(f, axis: str) -> float:
+        """Magnitude of force component on the given axis (sensor/wrench frame)."""
+        axis = axis.lower()
+        if axis == "x":
+            return abs(float(f.x))
+        if axis == "y":
+            return abs(float(f.y))
+        if axis == "z":
+            return abs(float(f.z))
+        return abs(float(f.x))
+
+    def _altitude_hold_vz(self, z_ref: float) -> float:
+        """Vertical velocity from altitude error (map frame), clamped."""
+        err = float(z_ref) - float(self.current_alt)
+        vz = self.approach_altitude_kp * err
+        lim = max(0.0, float(self.approach_vz_limit))
+        if vz > lim:
+            return lim
+        if vz < -lim:
+            return -lim
+        return vz
+
+    def _publish_wrench_setpoint(self, force_net: float, axis: str) -> None:
+        """Publish raw force target for wrench_controller: sensor reads bias + contact."""
+        raw = float(force_net) + self.force_baseline_magnitude
         msg = WrenchStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.sensor_frame
         if axis == "x":
-            msg.wrench.force.x = force_mag
+            msg.wrench.force.x = raw
         elif axis == "y":
-            msg.wrench.force.y = force_mag
+            msg.wrench.force.y = raw
         elif axis == "z":
-            msg.wrench.force.z = force_mag
+            msg.wrench.force.z = raw
         else:
-            msg.wrench.force.x = force_mag
+            msg.wrench.force.x = raw
         self.ft_setpoint_pub.publish(msg)
 
     def _set_wrench_switch(self, enabled: bool) -> None:

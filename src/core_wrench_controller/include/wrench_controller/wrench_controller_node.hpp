@@ -93,6 +93,12 @@ private:
   // Contact frame name (from parameter, used by combine_motion_and_force)
   std::string contact_frame_{"contact"};
 
+  // Diagonal of vel_mat in combine_motion_and_force: force_mat = I - diag(mix_vel_*).
+  // For axis a, wrench thrust contributes (1 - mix_vel_a) * F_a (e.g. 0.3 when mix_vel_x=0.7).
+  double mix_vel_x_{0.7};
+  double mix_vel_y_{1.0};
+  double mix_vel_z_{1.0};
+
   // Callbacks (ROS2 equivalents of the ROS1 versions)
   void ft_data_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
   void ft_setpoint_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);

@@ -61,7 +61,13 @@ public:
   void reset();
 
   // Configure PID gains for each force axis from external parameters.
-  void configure_fx(double p, double d, double minimum, double maximum);
+  void configure_fx(
+    double p,
+    double i,
+    double d,
+    double integral_threshold,
+    double minimum,
+    double maximum);
   void configure_fy(double p, double d, double minimum, double maximum);
   void configure_fz(
     double p,
@@ -70,6 +76,9 @@ public:
     double integral_threshold,
     double minimum,
     double maximum);
+
+  double meas_force_x() const { return meas_force_sensor_frame_.x(); }
+  double target_force_x() const { return target_force_sensor_frame_.x(); }
 
 private:
   // Controllers

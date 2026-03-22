@@ -63,6 +63,9 @@ bool WrenchControlNode::initialize()
   std::string world_frame =
     this->declare_parameter<std::string>("world_frame", "map");
   contact_frame_ = this->declare_parameter<std::string>("contact_frame", "contact");
+  mix_vel_x_ = this->declare_parameter<double>("mix_vel_x", 0.7);
+  mix_vel_y_ = this->declare_parameter<double>("mix_vel_y", 1.0);
+  mix_vel_z_ = this->declare_parameter<double>("mix_vel_z", 1.0);
   std::string camera_frame =
     this->declare_parameter<std::string>("camera_frame", "camera");
 
@@ -86,6 +89,12 @@ bool WrenchControlNode::initialize()
     this->declare_parameter<double>("force_ff_coeffcient_bias", 0.05);
   double velx_damping_coefficient =
     this->declare_parameter<double>("velx_damping_coefficient", 0.0);
+
+  RCLCPP_INFO(
+    this->get_logger(),
+    "mix_vel (pose weight per axis) = (%.2f, %.2f, %.2f) → wrench force gain (1-mix) = (%.2f, %.2f, %.2f)",
+    mix_vel_x_, mix_vel_y_, mix_vel_z_,
+    1.0 - mix_vel_x_, 1.0 - mix_vel_y_, 1.0 - mix_vel_z_);
 
   RCLCPP_INFO(
     this->get_logger(),
@@ -124,7 +133,10 @@ bool WrenchControlNode::initialize()
 
   // Force-loop PID gains (from wrench_px4_params.yaml style parameters)
   const double fx_p = this->declare_parameter<double>("fx.P", 0.0);
+  const double fx_i = this->declare_parameter<double>("fx.I", 0.0);
   const double fx_d = this->declare_parameter<double>("fx.D", 0.0);
+  const double fx_integral_threshold =
+    this->declare_parameter<double>("fx.integral_threshold", 20.0);
   const double fx_min = this->declare_parameter<double>("fx.min", -0.3);
   const double fx_max = this->declare_parameter<double>("fx.max", 0.3);
 
@@ -221,7 +233,7 @@ bool WrenchControlNode::initialize()
     mean_filter_max_buffer_size);
 
   // Configure PID gains inside the wrench controller
-  wrench_controller_->configure_fx(fx_p, fx_d, fx_min, fx_max);
+  wrench_controller_->configure_fx(fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max);
   wrench_controller_->configure_fy(fy_p, fy_d, fy_min, fy_max);
   wrench_controller_->configure_fz(
     fz_p, fz_i, fz_d, fz_integral_threshold, fz_min, fz_max);
@@ -293,11 +305,14 @@ bool WrenchControlNode::execute()
         1000,
         "calculate_thrust_torque() false; publishing pose-only thrust (check FT/setpoint).");
       thrust_des = thrust_pose_des;
+      // Respect velocity mixing even in fallback: zero force-owned axes so the
+      // pose controller doesn't push on the wall-normal direction.
+      thrust_des.setX(mix_vel_x_ * thrust_pose_des.x());
     } else {
       tf2::Matrix3x3 vel_mat(
-        0.7, 0.0, 0.0,
-        0.0, 1.0, 0.0,
-        0.0, 0.0, 1.0);
+        mix_vel_x_, 0.0, 0.0,
+        0.0, mix_vel_y_, 0.0,
+        0.0, 0.0, mix_vel_z_);
       tf2::Vector3 contact_normal(-1.0, 0.0, 0.0);
       tf2::Vector3 force_constraint_vec(0.0, 0.0, 0.0);
 
@@ -309,6 +324,11 @@ bool WrenchControlNode::execute()
         force_constraint_vec,
         this->get_parameter("target_frame").as_string(),
         thrust_des);
+
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "FC OK  wrench_x=%.4f  pose_x=%.4f  mixed_x=%.4f  meas=%.3f tgt=%.3f",
+        thrust_wrench_des.x(), thrust_pose_des.x(), thrust_des.x(),
+        wrench_controller_->meas_force_x(), wrench_controller_->target_force_x());
     }
   }
 
@@ -441,6 +461,15 @@ void WrenchControlNode::ft_data_callback(
     return;
   }
 
+  static bool logged_frame_id = false;
+  if (!logged_frame_id) {
+    RCLCPP_WARN(this->get_logger(),
+      "ft_data frame_id='%s'  raw=(%.3f, %.3f, %.3f)",
+      msg->header.frame_id.c_str(),
+      msg->wrench.force.x, msg->wrench.force.y, msg->wrench.force.z);
+    logged_frame_id = true;
+  }
+
   auto filtered = wrench_controller_->update_state(*msg, *tf_buffer_);
 
   if (publish_filtered_ft_data_ && filtered_ft_data_pub_) {
@@ -484,10 +513,11 @@ void WrenchControlNode::odometry_callback(
 void WrenchControlNode::switch_callback(
   const std_msgs::msg::Bool::SharedPtr msg)
 {
+  bool prev = mode_switch_;
   mode_switch_ = msg->data;
-  if (!mode_switch_) {
+  if (!mode_switch_ && prev) {
     RCLCPP_INFO(this->get_logger(), "Switching to pose control mode.");
-  } else {
+  } else if (mode_switch_ && !prev) {
     RCLCPP_INFO(
       this->get_logger(),
       "Switching to motion-force control mode (reset wrench integrators).");

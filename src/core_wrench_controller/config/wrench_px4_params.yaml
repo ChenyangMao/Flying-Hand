@@ -1,4 +1,8 @@
 # ROS2 parameters for WrenchControlNode (PX4-based UAV).
+#
+# Force loops: single-axis — only sensor X (wall normal / ft_setpoint.x). fy and fz P/I/D are 0.
+# (control_stack_base defaults fz-only for “press along Z” missions; this repo’s wall tests use X.)
+#
 # Aligned with control_stack_base: ROS1 loads core_pose_controller/config/pose_px4_params.yaml
 # into the wrench node; internal PoseController reads ~/pose_controller/P, I, D, ...
 # Here the same data lives under wrench_controller.ros__parameters.pose_controller.* .
@@ -28,9 +32,10 @@ wrench_controller:
     max_tilt: 30.0
 
     # Internal PoseController gains (source of truth; C++ only uses YAML fallbacks if a key is absent)
+    # Slightly lower P on X so pose loop does not fight wall normal force control as much.
     pose_controller:
-      P: [0.12, 0.12, 0.25]
-      I: [0.08, 0.08, 0.05]
+      P: [0.09, 0.11, 0.25]
+      I: [0.06, 0.07, 0.05]
       D: [0.15, 0.15, 0.1]
       FF: [0.0, 0.0, 0.0]
       integral_threshold: [0.5, 0.5, 5.0]
@@ -39,18 +44,20 @@ wrench_controller:
 
     execute_target: 100.0
 
-    fx.P: 0.0
-    fx.D: 0.0
-    fx.min: -0.3
-    fx.max: 0.3
+    fx.P: 0.08
+    fx.I: 0.012
+    fx.D: 0.03
+    fx.integral_threshold: 4.0
+    fx.min: -0.35
+    fx.max: 0.35
 
     fy.P: 0.0
     fy.D: 0.0
     fy.min: -0.2
     fy.max: 0.2
 
-    fz.P: 0.0012
-    fz.I: 0.009
+    fz.P: 0.0
+    fz.I: 0.0
     fz.D: 0.0
     fz.integral_threshold: 20.0
     fz.min: -0.8
