@@ -234,22 +234,22 @@ bool WrenchController::calculate_thrust_torque(
       fy_controller_.get_control(meas_force_sensor_frame_.y(), 0.0),
       fz_controller_.get_control(meas_force_sensor_frame_.z(), 0.0));
 
-    tf2::Vector3 thrust_ff_sensor_frame(0, 0, 0.1);
-    thrust_ff_sensor_frame.setZ(
-      force_ff_coefficient * target_force_sensor_frame_.z() + force_ff_coefficient_bias);
+    // Feedforward: static thrust on the contact-normal axis (sensor X) proportional
+    // to the desired force, reducing the burden on the PID integral term.
+    tf2::Vector3 thrust_ff_sensor_frame(
+      force_ff_coefficient * target_force_sensor_frame_.x() + force_ff_coefficient_bias,
+      0.0, 0.0);
 
+    // Velocity damping on the approach axis (world X ≈ sensor X when level) to
+    // resist rapid approach/bounce and prevent force runaway.
     thrust_vel_damping_ =
-      -velx_damping_coefficient * odometry_vel_world_frame_.z();
-    if (thrust_vel_damping_ > 0.05) {
-      thrust_vel_damping_ = 0.05;
-    } else if (thrust_vel_damping_ < -0.05) {
-      thrust_vel_damping_ = -0.05;
-    }
+      -velx_damping_coefficient * odometry_vel_world_frame_.x();
+    thrust_vel_damping_ = std::clamp(thrust_vel_damping_, -0.10, 0.10);
 
     tf2::Vector3 last_thrust_des =
       delta_thrust_des_sensor_frame +
       thrust_ff_sensor_frame +
-      tf2::Vector3(0, 0, thrust_vel_damping_);
+      tf2::Vector3(thrust_vel_damping_, 0, 0);
 
     if (last_thrust_des.z() < 0.005) {
       last_thrust_des.setZ(0.005);

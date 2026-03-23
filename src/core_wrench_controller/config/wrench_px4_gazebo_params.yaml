@@ -1,30 +1,42 @@
 # Gazebo simulation overrides (loaded after wrench_px4_params.yaml).
 #
-# Wall contact: X axis is PURE force control (mix_vel_x=0 → position has no authority on X).
-# Y/Z remain pure position control (mix_vel_y/z=1).
+# Hybrid motion-force: pose controller owns 70% of X thrust (mix_vel_x=0.7),
+# force PID provides the remaining 30% correction.  Y/Z remain pure position.
 
 wrench_controller:
   ros__parameters:
     thrust_max: 1.0
     hover_thrust: 0.58
+    max_tilt: 45.0
 
-    # Pure force/position split: force owns X, position owns Y and Z.
-    mix_vel_x: 0.0
+    # Hybrid mix: pose 70%, force 30% on contact-normal (X).
+    mix_vel_x: 0.7
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
-    fx.P: 0.15
-    fx.I: 0.008
-    fx.D: 0.05
-    fx.integral_threshold: 3.0
-    fx.min: -0.40
+    # Velocity damping resists rapid approach / bounce on the contact axis.
+    velx_damping_coefficient: 0.20
+
+    # Force PID on X — strong D to suppress force creep, moderate P/I.
+    fx.P: 0.10
+    fx.I: 0.006
+    fx.D: 0.18
+    fx.integral_threshold: 2.5
+    fx.min: -0.50
     fx.max: 0.50
 
+    # Reduce filter buffer to lower latency (10 samples @ 100 Hz = 100 ms).
+    mean_filter_max_buffer_size: 10
+    median_filter_max_buffer_size: 15
+
+    # Raise ff bias so the force controller provides stronger baseline push on X.
+    force_ff_coeffcient_bias: 0.08
+
     pose_controller:
-      P: [0.05, 0.10, 0.18]
-      I: [0.03, 0.06, 0.05]
+      P: [0.18, 0.10, 0.18]
+      I: [0.04, 0.06, 0.05]
       D: [0.14, 0.14, 0.12]
       FF: [0.0, 0.0, 0.0]
-      integral_threshold: [0.5, 0.5, 5.0]
+      integral_threshold: [0.8, 0.5, 5.0]
       min: [-0.3, -0.3, -0.5]
       max: [0.3, 0.3, 0.5]

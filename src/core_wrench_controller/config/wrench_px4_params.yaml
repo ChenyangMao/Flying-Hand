@@ -29,7 +29,7 @@ wrench_controller:
     hover_thrust: 0.56
     thrust_min: 0.1
     thrust_max: 0.75
-    max_tilt: 30.0
+    max_tilt: 45.0
 
     # Internal PoseController gains (source of truth; C++ only uses YAML fallbacks if a key is absent)
     # Slightly lower P on X so pose loop does not fight wall normal force control as much.
