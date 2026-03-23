@@ -17,11 +17,11 @@ wrench_controller:
     # Velocity damping resists rapid approach / bounce on the contact axis.
     velx_damping_coefficient: 0.20
 
-    # Force PID on X — strong D to suppress force creep, moderate P/I.
-    fx.P: 0.10
-    fx.I: 0.006
-    fx.D: 0.18
-    fx.integral_threshold: 2.5
+    # Force PID on X — moderate gains; pose controller handles the bulk.
+    fx.P: 0.12
+    fx.I: 0.008
+    fx.D: 0.06
+    fx.integral_threshold: 3.0
     fx.min: -0.50
     fx.max: 0.50
 

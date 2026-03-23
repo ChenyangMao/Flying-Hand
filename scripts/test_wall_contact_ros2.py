@@ -74,7 +74,7 @@ class WallContactTester(Node):
         self.declare_parameter("sensor_offset_z", -0.3)
         # tracking_point X beyond contact point (m), gives pose controller
         # a persistent forward push that cooperates with force PID.
-        self.declare_parameter("hold_x_offset", 0.20)
+        self.declare_parameter("hold_x_offset", 0.10)
         self.declare_parameter("retreat_velocity", 0.08)
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
