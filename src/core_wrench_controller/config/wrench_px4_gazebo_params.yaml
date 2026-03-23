@@ -2,6 +2,9 @@
 #
 # Hybrid motion-force: pose controller owns 70% of X thrust (mix_vel_x=0.7),
 # force PID provides the remaining 30% correction.  Y/Z remain pure position.
+#
+# In ft_sensor frame the wall-contact axis is Z (after the pitch=-π/2 TF
+# from ft_sensor to sim_ft_sensor).  Gravity sits on Fx (~0.98 N constant).
 
 wrench_controller:
   ros__parameters:
@@ -9,34 +12,39 @@ wrench_controller:
     hover_thrust: 0.58
     max_tilt: 45.0
 
-    # Hybrid mix: pose 70%, force 30% on contact-normal (X).
+    # Hybrid mix: pose 70%, force 30% on contact-normal (world X).
     mix_vel_x: 0.7
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
     # Velocity damping resists rapid approach / bounce on the contact axis.
-    velx_damping_coefficient: 0.20
+    velx_damping_coefficient: 0.25
 
-    # Force PID on X — moderate gains; pose controller handles the bulk.
-    fx.P: 0.12
-    fx.I: 0.008
-    fx.D: 0.06
-    fx.integral_threshold: 3.0
-    fx.min: -0.50
-    fx.max: 0.50
+    # Zero out fx (gravity axis in sensor frame — not the contact axis).
+    fx.P: 0.0
+    fx.I: 0.0
+    fx.D: 0.0
+
+    # Force PID on sensor-Z (the actual wall-contact axis in ft_sensor frame).
+    fz.P: 0.15
+    fz.I: 0.04
+    fz.D: 0.15
+    fz.integral_threshold: 2.0
+    fz.min: -0.80
+    fz.max: 0.80
 
     # Reduce filter buffer to lower latency (10 samples @ 100 Hz = 100 ms).
     mean_filter_max_buffer_size: 10
     median_filter_max_buffer_size: 15
 
-    # Raise ff bias so the force controller provides stronger baseline push on X.
+    # Feedforward bias on sensor-Z (contact axis).
     force_ff_coeffcient_bias: 0.08
 
     pose_controller:
       P: [0.18, 0.10, 0.18]
-      I: [0.04, 0.06, 0.05]
+      I: [0.0, 0.06, 0.05]
       D: [0.14, 0.14, 0.12]
       FF: [0.0, 0.0, 0.0]
-      integral_threshold: [0.8, 0.5, 5.0]
+      integral_threshold: [0.5, 0.5, 5.0]
       min: [-0.3, -0.3, -0.5]
       max: [0.3, 0.3, 0.5]

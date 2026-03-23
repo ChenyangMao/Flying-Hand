@@ -3,9 +3,11 @@
 Wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
 Arms the drone, takes off, approaches a wall via velocity setpoints,
-then switches the wrench controller to force-control mode on the X axis.
-After net Fx stays within the desired band continuously for ``hold_time``
-seconds, the drone retreats, descends, and disarms.
+then switches the wrench controller to force-control mode.
+After the contact force (sensor Fz in ft_sensor frame, which corresponds
+to world-X wall-normal after the TF chain) stays within the desired band
+continuously for ``hold_time`` seconds, the drone retreats, descends, and
+disarms.
 
 Required running processes:
   1. PX4 SITL        (make px4_sitl gz_hexa_scorpion)
@@ -58,7 +60,7 @@ class WallContactTester(Node):
         self.declare_parameter("desired_force", 1.5)
         self.declare_parameter("approach_velocity", 0.2)
         self.declare_parameter("hold_time", 10.0)
-        self.declare_parameter("force_hold_tolerance", 1.2)
+        self.declare_parameter("force_hold_tolerance", 0.2)
         self.declare_parameter("max_hold_timeout", 90.0)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.5)
@@ -70,7 +72,7 @@ class WallContactTester(Node):
         self.declare_parameter("map_frame_id", "map")
         self.declare_parameter("base_link_frame_id", "base_link")
         self.declare_parameter("sensor_offset_z", -0.3)
-        self.declare_parameter("hold_x_offset", 0.15)
+        self.declare_parameter("hold_x_offset", 0.3)
         self.declare_parameter("retreat_velocity", 0.08)
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
@@ -145,7 +147,7 @@ class WallContactTester(Node):
         # --------------- internal state --------------- #
         self.state = TestState.PREFLIGHT
         self.last_force_msg: Optional[WrenchStamped] = None
-        self.last_fx: float = 0.0
+        self.last_fz: float = 0.0
         self.contact_time: Optional[Time] = None
         self._in_band_since: Optional[Time] = None
         self.hold_odom: Optional[Odometry] = None
@@ -168,7 +170,7 @@ class WallContactTester(Node):
             f"WallContactTester started. force_topic='{force_topic}', "
             f"approach_vel={self.approach_velocity:.2f} m/s, "
             f"contact_threshold={self.force_threshold:.2f} N, "
-            f"desired_Fx={self.desired_force:.1f} N, "
+            f"desired_Fz={self.desired_force:.1f} N, "
             f"hold: {self.hold_time:.1f}s within "
             f"{self.desired_force:.1f}±{self.force_hold_tolerance:.2f} N, "
             f"hold_x_offset={self.hold_x_offset:.2f}m."
@@ -187,7 +189,7 @@ class WallContactTester(Node):
 
     def _ft_callback(self, msg: WrenchStamped) -> None:
         self.last_force_msg = msg
-        self.last_fx = abs(float(msg.wrench.force.x))
+        self.last_fz = abs(float(msg.wrench.force.z))
 
     def _attitude_thrust_cb(self, msg: AttitudeThrust) -> None:
         self.last_attitude_thrust = msg
@@ -335,9 +337,9 @@ class WallContactTester(Node):
         if self.last_force_msg is None:
             return
 
-        if self.last_fx > self.force_threshold:
+        if self.last_fz > self.force_threshold:
             self.get_logger().info(
-                f"Contact detected! Fx={self.last_fx:.3f} N "
+                f"Contact detected! Fz={self.last_fz:.3f} N "
                 f"(threshold={self.force_threshold:.2f} N)  "
                 f"alt={self.current_alt:.2f}m")
             self.hold_odom = self.last_odom
@@ -367,7 +369,7 @@ class WallContactTester(Node):
         now = self.get_clock().now()
         t_total = (now - self.contact_time).nanoseconds * 1e-9
 
-        in_band = abs(self.last_fx - self.desired_force) <= self.force_hold_tolerance
+        in_band = abs(self.last_fz - self.desired_force) <= self.force_hold_tolerance
 
         if in_band:
             if self._in_band_since is None:
@@ -382,7 +384,7 @@ class WallContactTester(Node):
         log_msg = (
             f"Hold  t_in_band={t_in_band:.1f}/{self.hold_time:.1f}s  "
             f"t_fc={t_total:.1f}s  in_band={in_band}  "
-            f"alt={self.current_alt:.2f}m  Fx={self.last_fx:.3f} N"
+            f"alt={self.current_alt:.2f}m  Fz={self.last_fz:.3f} N"
         )
         if self.last_attitude_thrust is not None:
             t = self.last_attitude_thrust.thrust
@@ -504,7 +506,10 @@ class WallContactTester(Node):
         t.header.frame_id = self.base_link_frame_id
         t.child_frame_id = self.sensor_frame
         t.transform.translation.z = self.sensor_offset_z
-        t.transform.rotation.w = 1.0
+        # pitch=π/2 so that ft_sensor Z aligns with base_link X (forward / wall-normal).
+        # Quaternion for pitch=π/2 around Y: qy=sin(π/4), qw=cos(π/4).
+        t.transform.rotation.y = 0.7071067811865476
+        t.transform.rotation.w = 0.7071067811865476
         self.tf_broadcaster.sendTransform(t)
 
     def _publish_map_to_contact_tf(self) -> None:
@@ -575,7 +580,7 @@ class WallContactTester(Node):
         msg = WrenchStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.sensor_frame
-        msg.wrench.force.x = float(self.desired_force)
+        msg.wrench.force.z = float(self.desired_force)
         self.ft_setpoint_pub.publish(msg)
 
     def _set_wrench_switch(self, enabled: bool) -> None:
