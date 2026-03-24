@@ -44,12 +44,12 @@ wrench_controller:
 
     execute_target: 100.0
 
-    fx.P: 0.08
-    fx.I: 0.012
-    fx.D: 0.03
-    fx.integral_threshold: 4.0
-    fx.min: -0.35
-    fx.max: 0.35
+    fx.P: 0.0012
+    fx.I: 0.009
+    fx.D: 0.000
+    fx.integral_threshold: 20.0
+    fx.min: -0.8
+    fx.max: 0.8
 
     fy.P: 0.0
     fy.D: 0.0
@@ -57,11 +57,9 @@ wrench_controller:
     fy.max: 0.2
 
     fz.P: 0.0
-    fz.I: 0.0
     fz.D: 0.0
-    fz.integral_threshold: 20.0
-    fz.min: -0.8
-    fz.max: 0.8
+    fz.min: -0.3
+    fz.max: 0.3
 
     ft_data.filter: true
     ft_data.publish: true

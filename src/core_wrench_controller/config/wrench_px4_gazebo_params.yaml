@@ -20,18 +20,13 @@ wrench_controller:
     # Velocity damping resists rapid approach / bounce on the contact axis.
     velx_damping_coefficient: 0.25
 
-    # Zero out fx (gravity axis in sensor frame — not the contact axis).
-    fx.P: 0.0
-    fx.I: 0.0
-    fx.D: 0.0
-
-    # Force PID on sensor-Z (the actual wall-contact axis in ft_sensor frame).
-    fz.P: 0.15
-    fz.I: 0.04
-    fz.D: 0.15
-    fz.integral_threshold: 2.0
-    fz.min: -0.80
-    fz.max: 0.80
+    # Enable force PID on sensor-X for wall-contact control.
+    fx.P: 0.0012
+    fx.I: 0.009
+    fx.D: 0.000
+    fx.integral_threshold: 20.0
+    fx.min: -0.8
+    fx.max: 0.8
 
     # Reduce filter buffer to lower latency (10 samples @ 100 Hz = 100 ms).
     mean_filter_max_buffer_size: 10
@@ -39,12 +34,3 @@ wrench_controller:
 
     # Feedforward bias on sensor-Z (contact axis).
     force_ff_coeffcient_bias: 0.08
-
-    pose_controller:
-      P: [0.18, 0.10, 0.18]
-      I: [0.0, 0.06, 0.05]
-      D: [0.14, 0.14, 0.12]
-      FF: [0.0, 0.0, 0.0]
-      integral_threshold: [0.5, 0.5, 5.0]
-      min: [-0.3, -0.3, -0.5]
-      max: [0.3, 0.3, 0.5]

@@ -237,6 +237,10 @@ bool WrenchControlNode::initialize()
   wrench_controller_->configure_fy(fy_p, fy_d, fy_min, fy_max);
   wrench_controller_->configure_fz(
     fz_p, fz_i, fz_d, fz_integral_threshold, fz_min, fz_max);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "Force PID fx: P=%.4f I=%.4f D=%.4f, i_th=%.3f, out=[%.3f, %.3f]",
+    fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max);
 
   // Subscriptions for F/T data, setpoint and odometry
   ft_data_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
