@@ -314,14 +314,29 @@ void WrenchController::configure_fx(
   double d,
   double integral_threshold,
   double minimum,
-  double maximum)
+  double maximum,
+  double ff,
+  double constant)
 {
   fx_controller_.set_P(p);
   fx_controller_.set_I(i);
   fx_controller_.set_D(d);
+  fx_controller_.set_FF(ff);
+  fx_controller_.set_constant(constant);
   fx_controller_.set_integral_threshold(integral_threshold);
   fx_controller_.set_minimum(minimum);
   fx_controller_.set_maximum(maximum);
+}
+
+void WrenchController::configure_fx_negative_gains(
+  bool use_negative,
+  double neg_p,
+  double neg_i,
+  double neg_d,
+  double neg_ff)
+{
+  fx_controller_.set_negative_gains(neg_p, neg_i, neg_d, neg_ff);
+  fx_controller_.set_use_negative_gains(use_negative);
 }
 
 void WrenchController::configure_fy(double p, double d, double minimum, double maximum)

@@ -66,7 +66,18 @@ public:
     double d,
     double integral_threshold,
     double minimum,
-    double maximum);
+    double maximum,
+    double ff = 0.0,
+    double constant = 0.0);
+
+  /** ROS1 dynamic_reconfigure parity for ~/fx PID. */
+  void configure_fx_negative_gains(
+    bool use_negative,
+    double neg_p,
+    double neg_i,
+    double neg_d,
+    double neg_ff);
+
   void configure_fy(double p, double d, double minimum, double maximum);
   void configure_fz(
     double p,

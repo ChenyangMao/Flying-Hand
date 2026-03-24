@@ -20,6 +20,10 @@ public:
   void set_D(double d);
   void set_FF(double ff);
 
+  /** Match ROS1 dynamic_reconfigure: asymmetric P/I/D/FF when error < 0. */
+  void set_use_negative_gains(bool use_negative);
+  void set_negative_gains(double neg_p, double neg_i, double neg_d, double neg_ff);
+
   // Limits and constants
   void set_integral_threshold(double integral_threshold);
   void set_minimum(double minimum_value);
@@ -67,6 +71,9 @@ private:
   double target_;
 
   std::chrono::steady_clock::time_point time_prev_;
+
+  /** Last saturated output; returned when dt <= 0 (ROS1 returns pid_info_msg.control). */
+  double last_control_{0.0};
 };
 
 // Helper error functions (same signatures as ROS1 version)

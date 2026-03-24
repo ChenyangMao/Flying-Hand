@@ -139,6 +139,14 @@ bool WrenchControlNode::initialize()
     this->declare_parameter<double>("fx.integral_threshold", 20.0);
   const double fx_min = this->declare_parameter<double>("fx.min", -0.3);
   const double fx_max = this->declare_parameter<double>("fx.max", 0.3);
+  const double fx_ff = this->declare_parameter<double>("fx.FF", 0.0);
+  const double fx_constant = this->declare_parameter<double>("fx.constant", 0.0);
+  const bool fx_use_negative_gains =
+    this->declare_parameter<bool>("fx.use_negative_gains", false);
+  const double fx_neg_p = this->declare_parameter<double>("fx.neg_P", 0.0);
+  const double fx_neg_i = this->declare_parameter<double>("fx.neg_I", 0.0);
+  const double fx_neg_d = this->declare_parameter<double>("fx.neg_D", 0.0);
+  const double fx_neg_ff = this->declare_parameter<double>("fx.neg_FF", 0.0);
 
   const double fy_p = this->declare_parameter<double>("fy.P", 0.0);
   const double fy_d = this->declare_parameter<double>("fy.D", 0.0);
@@ -233,7 +241,10 @@ bool WrenchControlNode::initialize()
     mean_filter_max_buffer_size);
 
   // Configure PID gains inside the wrench controller
-  wrench_controller_->configure_fx(fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max);
+  wrench_controller_->configure_fx(
+    fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max, fx_ff, fx_constant);
+  wrench_controller_->configure_fx_negative_gains(
+    fx_use_negative_gains, fx_neg_p, fx_neg_i, fx_neg_d, fx_neg_ff);
   wrench_controller_->configure_fy(fy_p, fy_d, fy_min, fy_max);
   wrench_controller_->configure_fz(
     fz_p, fz_i, fz_d, fz_integral_threshold, fz_min, fz_max);

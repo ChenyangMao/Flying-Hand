@@ -37,6 +37,25 @@ void PIDController::set_I(double i) { I_ = i; }
 void PIDController::set_D(double d) { D_ = d; }
 void PIDController::set_FF(double ff) { FF_ = ff; }
 
+void PIDController::set_use_negative_gains(bool use_negative)
+{
+  use_negative_gains_ = use_negative;
+  if (!use_negative) {
+    neg_P_ = P_;
+    neg_I_ = I_;
+    neg_D_ = D_;
+    neg_FF_ = FF_;
+  }
+}
+
+void PIDController::set_negative_gains(double neg_p, double neg_i, double neg_d, double neg_ff)
+{
+  neg_P_ = neg_p;
+  neg_I_ = neg_i;
+  neg_D_ = neg_d;
+  neg_FF_ = neg_ff;
+}
+
 void PIDController::set_integral_threshold(double integral_threshold)
 {
   integral_threshold_ = integral_threshold;
@@ -83,7 +102,7 @@ double PIDController::get_control(double actual, double ff_quantity)
     std::chrono::duration_cast<std::chrono::duration<double>>(time_now - time_prev_).count();
 
   if (dt <= 0.0) {
-    return 0.0;
+    return last_control_;
   }
 
   const double error = (calculate_error_func_)(target_, actual);
@@ -101,19 +120,17 @@ double PIDController::get_control(double actual, double ff_quantity)
     active_ = true;
   }
 
-  // Select gains based on sign of error (negative-gain support kept for compatibility)
+  // P/I and derivative-filter mixing FF may switch to neg_* when error < 0 (ROS1 parity).
   double p_gain = P_;
   double i_gain = I_;
-  double d_gain = D_;
   double ff_gain = FF_;
   if (use_negative_gains_ && error < 0.0) {
     p_gain = neg_P_;
     i_gain = neg_I_;
-    d_gain = neg_D_;
     ff_gain = neg_FF_;
   }
 
-  // Simple derivative filtering similar to the ROS1 implementation
+  // Derivative low-pass: (1 - FF) acts on derivative step (ROS1 names this param "FF").
   double derivative_diff = derivative_ - derivative_filtered_;
   const double half_max = 0.5 * maximum_;
   const double half_min = 0.5 * minimum_;
@@ -126,16 +143,16 @@ double PIDController::get_control(double actual, double ff_quantity)
 
   const double p_component = p_gain * error;
   const double i_component = i_gain * integral_;
-  const double d_component = d_gain * derivative_;
-  const double ff_component = d_gain * derivative_filtered_;
+  // ROS1: unfiltered D*derivative is not added to control; only D*derivative_filtered is (as "ff_component").
+  const double ff_component = D_ * derivative_filtered_;
 
   double control = p_component + i_component + ff_component + constant_;
 
-  // Saturate control
   control = std::max(std::min(control, maximum_), minimum_);
 
   time_prev_ = time_now;
   error_prev_ = error;
+  last_control_ = control;
 
   return control;
 }
@@ -152,11 +169,9 @@ double calculate_error_minus(double target, double actual)
 
 double calculate_error_angle(double target, double actual)
 {
-  double diff = std::fmod(target - actual + M_PI, 2.0 * M_PI);
-  if (diff < 0.0) {
-    diff += 2.0 * M_PI;
-  }
-  return diff - M_PI;
+  return std::atan2(
+    std::sin(target - actual),
+    std::cos(target - actual));
 }
 
 }  // namespace core_pid_controller
