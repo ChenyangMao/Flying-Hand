@@ -43,6 +43,13 @@ private:
   rclcpp::Service<core_drone_interface::srv::DroneCommand>::SharedPtr drone_command_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr is_armed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr has_control_pub_;
+  // Keep subscription handles alive; otherwise callbacks never trigger.
+  rclcpp::Subscription<mav_msgs::msg::AttitudeThrust>::SharedPtr attitude_thrust_sub_;
+  rclcpp::Subscription<mav_msgs::msg::RateThrust>::SharedPtr rate_thrust_sub_;
+  rclcpp::Subscription<mav_msgs::msg::RollPitchYawrateThrust>::SharedPtr roll_pitch_yawrate_thrust_sub_;
+  rclcpp::Subscription<mav_msgs::msg::TorqueThrust>::SharedPtr torque_thrust_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
 };
 
 }  // namespace core_drone_interface

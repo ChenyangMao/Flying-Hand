@@ -70,7 +70,9 @@ class WallContactTester(Node):
         self.declare_parameter("approach_vz_limit", 0.35)
         self.declare_parameter("loop_rate", 50.0)
         self.declare_parameter("map_frame_id", "map")
+        self.declare_parameter("map_ned_frame_id", "map_ned")
         self.declare_parameter("base_link_frame_id", "base_link")
+        self.declare_parameter("frd_frame_id", "base_link_frd")
         self.declare_parameter("sensor_offset_z", -0.3)
         self.declare_parameter("hold_x_offset", 0.3)
         self.declare_parameter("retreat_velocity", 0.08)
@@ -93,7 +95,9 @@ class WallContactTester(Node):
         self.approach_vz_limit = float(self.get_parameter("approach_vz_limit").value)
         loop_rate = self.get_parameter("loop_rate").value
         self.map_frame_id = self.get_parameter("map_frame_id").value
+        self.map_ned_frame_id = self.get_parameter("map_ned_frame_id").value
         self.base_link_frame_id = self.get_parameter("base_link_frame_id").value
+        self.frd_frame_id = self.get_parameter("frd_frame_id").value
         self.sensor_offset_z = float(self.get_parameter("sensor_offset_z").value)
         self.hold_x_offset = float(self.get_parameter("hold_x_offset").value)
         self.retreat_velocity = float(self.get_parameter("retreat_velocity").value)
@@ -200,6 +204,8 @@ class WallContactTester(Node):
 
     def _loop(self) -> None:
         self._publish_map_to_base_link_tf()
+        self._publish_map_to_ned_tf()
+        self._publish_base_to_frd_tf()
         self._publish_base_to_sensor_tf()
         self._publish_map_to_contact_tf()
 
@@ -356,8 +362,9 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_hold_force(self) -> None:
-        vz = self._altitude_hold_vz(self.takeoff_alt)
-        self._publish_velocity(0.0, 0.0, vz)
+        # Do NOT publish velocity to MAVROS during force control — the wrench_controller
+        # publishes attitude+thrust via drone_interface_node -> mavros/setpoint_raw/attitude.
+        # Sending velocity setpoints simultaneously causes PX4 to follow velocity instead.
         self._publish_tracking_point()
         self._publish_wrench_setpoint()
         self._set_wrench_switch(True)
@@ -506,10 +513,26 @@ class WallContactTester(Node):
         t.header.frame_id = self.base_link_frame_id
         t.child_frame_id = self.sensor_frame
         t.transform.translation.z = self.sensor_offset_z
-        # pitch=π/2 so that ft_sensor Z aligns with base_link X (forward / wall-normal).
-        # Quaternion for pitch=π/2 around Y: qy=sin(π/4), qw=cos(π/4).
-        t.transform.rotation.y = 0.7071067811865476
-        t.transform.rotation.w = 0.7071067811865476
+        # Keep identity rotation so base_link X aligns with ft_sensor X.
+        t.transform.rotation.w = 1.0
+        self.tf_broadcaster.sendTransform(t)
+
+    def _publish_map_to_ned_tf(self) -> None:
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = self.map_frame_id
+        t.child_frame_id = self.map_ned_frame_id
+        # Keep identity rotation so map and map_ned axes are aligned.
+        t.transform.rotation.w = 1.0
+        self.tf_broadcaster.sendTransform(t)
+
+    def _publish_base_to_frd_tf(self) -> None:
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = self.base_link_frame_id
+        t.child_frame_id = self.frd_frame_id
+        # Keep identity rotation so base_link and frd axes are aligned.
+        t.transform.rotation.w = 1.0
         self.tf_broadcaster.sendTransform(t)
 
     def _publish_map_to_contact_tf(self) -> None:

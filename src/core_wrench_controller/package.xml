@@ -22,6 +22,8 @@
   <depend>core_pose_controller</depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-ament-index-package</exec_depend>
+  <!-- PX4 bridge launch (optional via include_px4_bridge); forwards attitude_thrust_command to MAVROS. -->
+  <exec_depend>core_px4_interface</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

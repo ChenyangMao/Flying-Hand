@@ -29,7 +29,6 @@ private:
   void state_callback(const mavros_msgs::msg::State::SharedPtr msg);
   void setpoint_timer_callback();
 
-  rclcpp::Node * node_{nullptr};
   mavros_msgs::msg::State current_state_;
   mavros_msgs::msg::AttitudeTarget last_attitude_target_;
   bool has_last_command_{false};
@@ -40,6 +39,7 @@ private:
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::TimerBase::SharedPtr setpoint_timer_;
   double setpoint_rate_hz_{50.0};
+  bool log_mavros_setpoints_{false};
 };
 
 }  // namespace core_px4_interface

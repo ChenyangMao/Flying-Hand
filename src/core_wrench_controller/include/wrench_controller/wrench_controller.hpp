@@ -56,7 +56,6 @@ public:
     const tf2::Vector3 & wrench_controller_ff_force,
     double velx_damping_coefficient);
 
-  bool check_in_contact(double thresh_force_z) const;
 
   void reset();
 

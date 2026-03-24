@@ -288,6 +288,13 @@ bool WrenchControlNode::execute()
     return true;
   }
 
+  RCLCPP_INFO_THROTTLE(
+    this->get_logger(),
+    *this->get_clock(),
+    1000,
+    "POS CTRL  pose_thrust_xyz=(%.4f, %.4f, %.4f)",
+    thrust_pose_des.x(), thrust_pose_des.y(), thrust_pose_des.z());
+
   tf2::Vector3 thrust_des = thrust_pose_des;
 
   // When in motion-force control mode, mix wrench-based thrust with pose-based thrust.
@@ -440,14 +447,7 @@ bool WrenchControlNode::combine_motion_and_force(
 
     return true;
   } catch (const tf2::TransformException & ex) {
-    // Without contact TF, the mix cannot run; sum thrusts in map frame so we still publish.
     (void)ex;
-    RCLCPP_WARN_THROTTLE(
-      this->get_logger(),
-      *this->get_clock(),
-      5000,
-      "combine_motion_and_force: TF map<->contact failed; using thrust_force + thrust_motion. "
-      "Launch static TF map->contact (see wrench_controller_gazebo.launch.py).");
     out_thrust_des = thrust_force + thrust_motion;
     if (pose_controller_) {
       tf2::Vector3 thrust_h_des = pose_controller_->constrain_horizontal_thrust(out_thrust_des);
@@ -472,6 +472,15 @@ void WrenchControlNode::ft_data_callback(
       msg->header.frame_id.c_str(),
       msg->wrench.force.x, msg->wrench.force.y, msg->wrench.force.z);
     logged_frame_id = true;
+  }
+
+  if (msg->header.frame_id == "sim_ft_sensor") {
+    RCLCPP_INFO_THROTTLE(
+      this->get_logger(),
+      *this->get_clock(),
+      1000,
+      "SIM FT  xyz=(%.4f, %.4f, %.4f)",
+      msg->wrench.force.x, msg->wrench.force.y, msg->wrench.force.z);
   }
 
   auto filtered = wrench_controller_->update_state(*msg, *tf_buffer_);

@@ -1,10 +1,4 @@
 # Gazebo simulation overrides (loaded after wrench_px4_params.yaml).
-#
-# Hybrid motion-force: pose controller owns 70% of X thrust (mix_vel_x=0.7),
-# force PID provides the remaining 30% correction.  Y/Z remain pure position.
-#
-# In ft_sensor frame the wall-contact axis is Z (after the pitch=-π/2 TF
-# from ft_sensor to sim_ft_sensor).  Gravity sits on Fx (~0.98 N constant).
 
 wrench_controller:
   ros__parameters:
@@ -17,13 +11,10 @@ wrench_controller:
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
-    # Velocity damping resists rapid approach / bounce on the contact axis.
-    velx_damping_coefficient: 0.25
-
     # Enable force PID on sensor-X for wall-contact control.
-    fx.P: 0.0012
-    fx.I: 0.009
-    fx.D: 0.000
+    fx.P: 0.012
+    fx.I: 0.09
+    fx.D: 0.01
     fx.integral_threshold: 20.0
     fx.min: -0.8
     fx.max: 0.8
@@ -31,6 +22,3 @@ wrench_controller:
     # Reduce filter buffer to lower latency (10 samples @ 100 Hz = 100 ms).
     mean_filter_max_buffer_size: 10
     median_filter_max_buffer_size: 15
-
-    # Feedforward bias on sensor-Z (contact axis).
-    force_ff_coeffcient_bias: 0.08

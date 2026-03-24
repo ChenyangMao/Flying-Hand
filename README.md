@@ -51,8 +51,6 @@ ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
 ### Launch ROS2 control stack
 One terminal for each one:
 ```
-ros2 launch core_drone_interface drone_interface_node.launch.py drone_interface:=PX4Interface
-ros2 launch core_pose_controller pose_controller_gazebo.launch.py
 ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 ```
 ### Start ft bridge

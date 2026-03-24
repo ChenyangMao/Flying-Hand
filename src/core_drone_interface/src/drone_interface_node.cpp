@@ -37,17 +37,17 @@ bool DroneInterfaceNode::initialize()
     "drone_command",
     std::bind(&DroneInterfaceNode::drone_command_callback, this, _1, _2, _3));
 
-  this->create_subscription<mav_msgs::msg::AttitudeThrust>(
+  attitude_thrust_sub_ = this->create_subscription<mav_msgs::msg::AttitudeThrust>(
     "attitude_thrust_command", 10, std::bind(&DroneInterfaceNode::attitude_thrust_callback, this, _1));
-  this->create_subscription<mav_msgs::msg::RateThrust>(
+  rate_thrust_sub_ = this->create_subscription<mav_msgs::msg::RateThrust>(
     "rate_thrust_command", 10, std::bind(&DroneInterfaceNode::rate_thrust_callback, this, _1));
-  this->create_subscription<mav_msgs::msg::RollPitchYawrateThrust>(
+  roll_pitch_yawrate_thrust_sub_ = this->create_subscription<mav_msgs::msg::RollPitchYawrateThrust>(
     "roll_pitch_yawrate_thrust_command", 10, std::bind(&DroneInterfaceNode::roll_pitch_yawrate_thrust_callback, this, _1));
-  this->create_subscription<mav_msgs::msg::TorqueThrust>(
+  torque_thrust_sub_ = this->create_subscription<mav_msgs::msg::TorqueThrust>(
     "torque_thrust_command", 10, std::bind(&DroneInterfaceNode::torque_thrust_callback, this, _1));
-  this->create_subscription<geometry_msgs::msg::TwistStamped>(
+  velocity_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
     "velocity_command", 10, std::bind(&DroneInterfaceNode::velocity_callback, this, _1));
-  this->create_subscription<geometry_msgs::msg::PoseStamped>(
+  pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
     "pose_command", 10, std::bind(&DroneInterfaceNode::pose_callback, this, _1));
 
   is_armed_pub_ = this->create_publisher<std_msgs::msg::Bool>("is_armed", 1);

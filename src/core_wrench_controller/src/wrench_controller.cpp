@@ -234,13 +234,13 @@ bool WrenchController::calculate_thrust_torque(
       fy_controller_.get_control(meas_force_sensor_frame_.y(), 0.0),
       fz_controller_.get_control(meas_force_sensor_frame_.z(), 0.0));
 
-    // Feedforward on the contact-normal axis (sensor Z after the pitch=-π/2 TF)
+    // Feedforward on the contact-normal axis (sensor X in current setup),
     // proportional to the desired force, reducing PID integral burden.
     tf2::Vector3 thrust_ff_sensor_frame(
-      0.0, 0.0,
-      force_ff_coefficient * target_force_sensor_frame_.z() + force_ff_coefficient_bias);
+      force_ff_coefficient * target_force_sensor_frame_.x() + force_ff_coefficient_bias,
+      0.0, 0.0);
 
-    // Velocity damping on the approach axis (world X → sensor Z when level).
+    // Velocity damping on the approach axis (world X -> sensor X in current setup).
     thrust_vel_damping_ =
       -velx_damping_coefficient * odometry_vel_world_frame_.x();
     thrust_vel_damping_ = std::clamp(thrust_vel_damping_, -0.10, 0.10);
@@ -248,10 +248,10 @@ bool WrenchController::calculate_thrust_torque(
     tf2::Vector3 last_thrust_des =
       delta_thrust_des_sensor_frame +
       thrust_ff_sensor_frame +
-      tf2::Vector3(0, 0, thrust_vel_damping_);
+      tf2::Vector3(thrust_vel_damping_, 0, 0);
 
-    if (last_thrust_des.z() < 0.005) {
-      last_thrust_des.setZ(0.005);
+    if (last_thrust_des.x() < 0.005) {
+      last_thrust_des.setX(0.005);
     }
 
     thrust_des = sensor_to_thrust_output_tf * last_thrust_des;
@@ -287,11 +287,6 @@ bool WrenchController::calculate_thrust_torque(
     }
     return false;
   }
-}
-
-bool WrenchController::check_in_contact(double thresh_force_z) const
-{
-  return target_force_sensor_frame_.z() > thresh_force_z;
 }
 
 void WrenchController::reset()
