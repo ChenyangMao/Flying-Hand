@@ -56,9 +56,9 @@ class WallContactTester(Node):
 
         # --------------- parameters --------------- #
         self.declare_parameter("force_topic", "ft_data_filtered")
-        self.declare_parameter("force_threshold", 1.0)
+        self.declare_parameter("force_threshold", 0.2)
         self.declare_parameter("desired_force", 1.5)
-        self.declare_parameter("approach_velocity", 0.2)
+        self.declare_parameter("approach_velocity", 0.1)
         self.declare_parameter("hold_time", 10.0)
         self.declare_parameter("force_hold_tolerance", 0.2)
         self.declare_parameter("max_hold_timeout", 90.0)
@@ -338,12 +338,16 @@ class WallContactTester(Node):
 
     def _step_approach(self) -> None:
         vz = self._altitude_hold_vz(self.takeoff_alt)
-        self._publish_velocity(self.approach_velocity, 0.0, vz)
 
         if self.last_force_msg is None:
+            self._publish_velocity(self.approach_velocity, 0.0, vz)
             return
 
         if self.last_fx > self.force_threshold:
+            # Same cycle as contact: full zero velocity setpoint. Horizontal zero avoids shoving
+            # the wall; vertical zero avoids sending a vz altitude-hold command the same instant
+            # we hand off to wrench attitude/thrust (reduces an upward kick in PX4 offboard).
+            self._publish_velocity(0.0, 0.0, 0.0)
             self.get_logger().info(
                 f"Contact detected! Fx={self.last_fx:.3f} N "
                 f"(threshold={self.force_threshold:.2f} N)  "
@@ -356,6 +360,9 @@ class WallContactTester(Node):
             self.get_logger().info(
                 "Switched to force control. Wrench controller now commands attitude/thrust.")
             self.state = TestState.HOLD_FORCE
+            return
+
+        self._publish_velocity(self.approach_velocity, 0.0, vz)
 
     # ------------------------------------------------------------------ #
     # HOLD_FORCE
@@ -393,6 +400,16 @@ class WallContactTester(Node):
             f"t_fc={t_total:.1f}s  in_band={in_band}  "
             f"alt={self.current_alt:.2f}m  Fx={self.last_fx:.3f} N"
         )
+        if self.hold_odom is not None and self.last_odom is not None:
+            hp = self.hold_odom.pose.pose.position
+            cp = self.last_odom.pose.pose.position
+            tx = float(hp.x) + self.hold_x_offset
+            ty = float(hp.y)
+            tz = float(self.takeoff_alt)
+            log_msg += (
+                f"  target_pos=({tx:.3f},{ty:.3f},{tz:.3f})  "
+                f"current_pos=({cp.x:.3f},{cp.y:.3f},{cp.z:.3f})"
+            )
         if self.last_attitude_thrust is not None:
             t = self.last_attitude_thrust.thrust
             q = self.last_attitude_thrust.attitude

@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Launch drone_interface_node with PX4Interface plugin (attitude_thrust_command -> MAVROS).
-
-Default log_mavros_setpoints is true (1 Hz) for each AttitudeTarget; set false in parameters to silence.
-"""
+"""Launch drone_interface_node with PX4Interface plugin (attitude_thrust_command -> MAVROS)."""
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -18,7 +15,6 @@ def generate_launch_description():
                 {'execute_target': 20.0},
                 {'drone_interface': 'PX4Interface'},
                 {'setpoint_rate': 50.0},
-                {'log_mavros_setpoints': True},
             ],
         ),
     ])

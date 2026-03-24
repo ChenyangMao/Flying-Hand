@@ -327,14 +327,17 @@ bool WrenchControlNode::execute()
       tf2::Vector3 contact_normal(-1.0, 0.0, 0.0);
       tf2::Vector3 force_constraint_vec(0.0, 0.0, 0.0);
 
-      combine_motion_and_force(
-        thrust_wrench_des,
-        thrust_pose_des,
-        contact_normal,
-        vel_mat,
-        force_constraint_vec,
-        this->get_parameter("target_frame").as_string(),
-        thrust_des);
+      if (!combine_motion_and_force(
+          thrust_wrench_des,
+          thrust_pose_des,
+          contact_normal,
+          vel_mat,
+          force_constraint_vec,
+          this->get_parameter("target_frame").as_string(),
+          thrust_des)) {
+        // Same as control_stack_base ROS1: skip publishing this cycle if contact-frame TF fails.
+        return true;
+      }
 
       RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
         "FC OK  wrench_x=%.4f  pose_x=%.4f  mixed_x=%.4f  meas=%.3f tgt=%.3f",
@@ -448,13 +451,7 @@ bool WrenchControlNode::combine_motion_and_force(
     return true;
   } catch (const tf2::TransformException & ex) {
     (void)ex;
-    out_thrust_des = thrust_force + thrust_motion;
-    if (pose_controller_) {
-      tf2::Vector3 thrust_h_des = pose_controller_->constrain_horizontal_thrust(out_thrust_des);
-      out_thrust_des.setX(thrust_h_des.x());
-      out_thrust_des.setY(thrust_h_des.y());
-    }
-    return true;
+    return false;
   }
 }
 

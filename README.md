@@ -28,8 +28,8 @@ sudo apt update
 sudo apt install python3-colcon-common-extensions
 sudo apt install ros-humble-mavros-msgs
 sudo apt install ros-humble-mavros
-sudo /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 source /opt/ros/humble/setup.bash
+sudo /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 cd Flying-Hand
 colcon build
 ```
@@ -47,6 +47,10 @@ source $HOME/Flying-Hand/install/setup.bash
 
 ```
 make px4_sitl gz_hexa_scorpion
+```
+Check PX4 offboard mode:
+```
+listener offboard_control_mode
 ```
 
 ### Start MAVROS

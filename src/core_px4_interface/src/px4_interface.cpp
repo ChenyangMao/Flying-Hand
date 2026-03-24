@@ -23,7 +23,6 @@ void PX4Interface::initialize(rclcpp::Node * node)
   set_mode_client_ = node_->create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
 
   setpoint_rate_hz_ = node_->declare_parameter<double>("setpoint_rate", 50.0);
-  log_mavros_setpoints_ = node_->declare_parameter<bool>("log_mavros_setpoints", false);
   setpoint_timer_ = node_->create_wall_timer(
     std::chrono::duration<double>(1.0 / setpoint_rate_hz_),
     std::bind(&PX4Interface::setpoint_timer_callback, this));
@@ -33,11 +32,6 @@ void PX4Interface::initialize(rclcpp::Node * node)
     "PX4Interface: subscribe (via DroneInterfaceNode) to attitude_thrust_command; "
     "publish mavros/setpoint_raw/attitude at %.1f Hz (timer resends last command).",
     setpoint_rate_hz_);
-  RCLCPP_INFO(
-    node_->get_logger(),
-    "PX4Interface: log_mavros_setpoints=%s — if true, throttled (1 Hz) logs appear only while "
-    "a publisher is sending AttitudeThrust (e.g. wrench_controller).",
-    log_mavros_setpoints_ ? "true" : "false");
 }
 
 void PX4Interface::state_callback(const mavros_msgs::msg::State::SharedPtr msg)
@@ -109,25 +103,6 @@ void PX4Interface::command_attitude_thrust(const mav_msgs::msg::AttitudeThrust &
   last_attitude_target_ = att;
   has_last_command_ = true;
   attitude_target_pub_->publish(att);
-
-  if (log_mavros_setpoints_) {
-    RCLCPP_INFO_THROTTLE(
-      node_->get_logger(),
-      *node_->get_clock(),
-      1000,
-      "MAVROS setpoint_raw/attitude -> PX4: thrust_scalar=%.4f (|input thrust|=%.4f from xyz=%.4f,%.4f,%.4f) "
-      "quat_xyzw=(%.4f,%.4f,%.4f,%.4f) type_mask=%u",
-      static_cast<double>(att.thrust),
-      thrust_mag,
-      msg.thrust.x,
-      msg.thrust.y,
-      msg.thrust.z,
-      static_cast<double>(msg.attitude.x),
-      static_cast<double>(msg.attitude.y),
-      static_cast<double>(msg.attitude.z),
-      static_cast<double>(msg.attitude.w),
-      att.type_mask);
-  }
 }
 
 void PX4Interface::command_velocity(geometry_msgs::msg::TwistStamped msg)

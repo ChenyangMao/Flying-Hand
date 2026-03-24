@@ -6,10 +6,14 @@ wrench_controller:
     hover_thrust: 0.58
     max_tilt: 45.0
 
-    # Hybrid mix: pose 70%, force 30% on contact-normal (world X).
-    mix_vel_x: 0.7
+    # Hybrid mix: lower pose weight on wall-normal so pose loop does not keep driving into the wall
+    # after brief contact (matches control_stack_base tuning intent; sim may need <=0.6).
+    mix_vel_x: 0.55
     mix_vel_y: 1.0
     mix_vel_z: 1.0
+
+    # Same parameter as ROS1 control_stack_base (damps vz in force calculation).
+    velx_damping_coefficient: 0.15
 
     # Enable force PID on sensor-X for wall-contact control.
     fx.P: 0.012

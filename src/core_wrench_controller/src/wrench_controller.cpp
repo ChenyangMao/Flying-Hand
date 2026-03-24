@@ -234,24 +234,32 @@ bool WrenchController::calculate_thrust_torque(
       fy_controller_.get_control(meas_force_sensor_frame_.y(), 0.0),
       fz_controller_.get_control(meas_force_sensor_frame_.z(), 0.0));
 
-    // Feedforward on the contact-normal axis (sensor X in current setup),
-    // proportional to the desired force, reducing PID integral burden.
+    // Feedforward on the contact-normal axis (sensor X for wall missions).
     tf2::Vector3 thrust_ff_sensor_frame(
       force_ff_coefficient * target_force_sensor_frame_.x() + force_ff_coefficient_bias,
       0.0, 0.0);
 
-    // Velocity damping on the approach axis (world X -> sensor X in current setup).
+    // Same as control_stack_base ROS1: damp using world-frame vertical velocity,
+    // injected on the sensor thrust vector's Z component before rotation to output frame.
     thrust_vel_damping_ =
-      -velx_damping_coefficient * odometry_vel_world_frame_.x();
-    thrust_vel_damping_ = std::clamp(thrust_vel_damping_, -0.10, 0.10);
+      -velx_damping_coefficient * odometry_vel_world_frame_.z();
+    if (thrust_vel_damping_ > 0.05) {
+      thrust_vel_damping_ = 0.05;
+    }
+    if (thrust_vel_damping_ < -0.05) {
+      thrust_vel_damping_ = -0.05;
+    }
 
     tf2::Vector3 last_thrust_des =
       delta_thrust_des_sensor_frame +
       thrust_ff_sensor_frame +
-      tf2::Vector3(thrust_vel_damping_, 0, 0);
+      tf2::Vector3(0.0, 0.0, thrust_vel_damping_);
 
-    if (last_thrust_des.x() < 0.005) {
-      last_thrust_des.setX(0.005);
+    if (last_thrust_des.z() < 0.005) {
+      last_thrust_des.setZ(0.005);
+    }
+    if (last_thrust_des.z() > 0.5) {
+      last_thrust_des.setZ(0.5);
     }
 
     thrust_des = sensor_to_thrust_output_tf * last_thrust_des;
@@ -291,8 +299,13 @@ bool WrenchController::calculate_thrust_torque(
 
 void WrenchController::reset()
 {
-  got_target_wrench_ = false;
-  got_ft_data_ = false;
+  // Match control_stack_base ROS1 WrenchController::Reset(): integrators only.
+  fx_controller_.reset_integral();
+  fy_controller_.reset_integral();
+  fz_controller_.reset_integral();
+  tx_controller_.reset_integral();
+  ty_controller_.reset_integral();
+  tz_controller_.reset_integral();
 }
 
 void WrenchController::configure_fx(
