@@ -2,12 +2,14 @@
 """
 Wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
-Arms the drone, takes off, approaches a wall via velocity setpoints,
-then switches the wrench controller to force-control mode.
-After the contact force (sensor Fx in ft_sensor frame)
-to world-X wall-normal after the TF chain) stays within the desired band
-continuously for ``hold_time`` seconds, the drone retreats, descends, and
-disarms.
+The test drives the UAV entirely through the external controller stack:
+`tracking_point` is streamed for motion control, and `ft_setpoint` plus
+`wrench_controller/switch` are used only during contact hold. No MAVROS
+velocity setpoints are sent during the mission.
+
+After the contact force (sensor Fx in ft_sensor frame) stays within the
+desired band continuously for ``hold_time`` seconds, the drone retreats,
+descends, and disarms.
 
 Required running processes:
   1. PX4 SITL        (make px4_sitl gz_hexa_scorpion)
@@ -20,7 +22,6 @@ Usage:
   python3 scripts/test_wall_contact_ros2.py
 """
 
-import math
 from enum import Enum, auto
 from typing import Optional
 
@@ -29,7 +30,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 
-from geometry_msgs.msg import TransformStamped, TwistStamped, WrenchStamped
+from geometry_msgs.msg import TransformStamped, WrenchStamped
 from mav_msgs.msg import AttitudeThrust
 from mavros_msgs.msg import State as MavrosState
 from mavros_msgs.srv import CommandBool, SetMode
@@ -56,25 +57,25 @@ class WallContactTester(Node):
 
         # --------------- parameters --------------- #
         self.declare_parameter("force_topic", "ft_data_filtered")
-        self.declare_parameter("force_threshold", 0.2)
-        self.declare_parameter("desired_force", 1.5)
-        self.declare_parameter("approach_velocity", 0.1)
+        self.declare_parameter("force_threshold", 0.5)
+        self.declare_parameter("desired_force", 3)
+        # Keep the final approach intentionally slow to avoid a large impact spike
+        # on first wall contact.
+        self.declare_parameter("approach_velocity", 0.05)
         self.declare_parameter("hold_time", 10.0)
-        self.declare_parameter("force_hold_tolerance", 0.2)
+        self.declare_parameter("force_hold_tolerance", 0.5)
         self.declare_parameter("max_hold_timeout", 90.0)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.5)
         self.declare_parameter("takeoff_velocity", 0.5)
         self.declare_parameter("pre_approach_hold_sec", 2.0)
-        self.declare_parameter("approach_altitude_kp", 0.8)
-        self.declare_parameter("approach_vz_limit", 0.35)
-        self.declare_parameter("loop_rate", 50.0)
+        self.declare_parameter("loop_rate", 100.0)
         self.declare_parameter("map_frame_id", "map")
         self.declare_parameter("map_ned_frame_id", "map_ned")
         self.declare_parameter("base_link_frame_id", "base_link")
         self.declare_parameter("frd_frame_id", "base_link_frd")
         self.declare_parameter("sensor_offset_z", -0.3)
-        self.declare_parameter("hold_x_offset", 0.3)
+        self.declare_parameter("hold_x_offset", 0.01)
         self.declare_parameter("retreat_velocity", 0.08)
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
@@ -91,8 +92,6 @@ class WallContactTester(Node):
         self.takeoff_alt = self.get_parameter("takeoff_altitude").value
         self.takeoff_vel = self.get_parameter("takeoff_velocity").value
         self.pre_approach_hold_sec = float(self.get_parameter("pre_approach_hold_sec").value)
-        self.approach_altitude_kp = float(self.get_parameter("approach_altitude_kp").value)
-        self.approach_vz_limit = float(self.get_parameter("approach_vz_limit").value)
         loop_rate = self.get_parameter("loop_rate").value
         self.map_frame_id = self.get_parameter("map_frame_id").value
         self.map_ned_frame_id = self.get_parameter("map_ned_frame_id").value
@@ -114,9 +113,6 @@ class WallContactTester(Node):
         self.mavros_state: Optional[MavrosState] = None
         self.state_sub = self.create_subscription(
             MavrosState, "mavros/state", self._mavros_state_cb, state_qos)
-
-        self.vel_pub = self.create_publisher(
-            TwistStamped, "mavros/setpoint_velocity/cmd_vel", 10)
 
         self.arming_client = self.create_client(CommandBool, "mavros/cmd/arming")
         self.set_mode_client = self.create_client(SetMode, "mavros/set_mode")
@@ -160,15 +156,20 @@ class WallContactTester(Node):
         self._offboard_requested = False
         self._preflight_log_timer = 0
         self._retreat_t0: Optional[Time] = None
-        self._retreat_pose_x0: float = 0.0
         self._land_t0: Optional[Time] = None
-        self._land_z0: Optional[float] = None
         self._disarm_sent = False
         self._idle_logged = False
+        self._target_initialized = False
+        self._command_target_x = 0.0
+        self._command_target_y = 0.0
+        self._command_target_z = 0.0
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = 0.0
 
         # --------------- main loop --------------- #
-        period = 1.0 / loop_rate if loop_rate > 0 else 0.02
-        self.timer = self.create_timer(period, self._loop)
+        self._loop_period = 1.0 / loop_rate if loop_rate > 0 else 0.02
+        self.timer = self.create_timer(self._loop_period, self._loop)
 
         self.get_logger().info(
             f"WallContactTester started. force_topic='{force_topic}', "
@@ -227,8 +228,6 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_preflight(self) -> None:
-        self._publish_velocity(0.0, 0.0, 0.0)
-
         if self.mavros_state is None:
             self._preflight_log_timer += 1
             if self._preflight_log_timer % 100 == 1:
@@ -239,6 +238,24 @@ class WallContactTester(Node):
             self._preflight_log_timer += 1
             if self._preflight_log_timer % 100 == 1:
                 self.get_logger().info("Waiting for FCU connection...")
+            return
+
+        if self.last_odom is None:
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info("Waiting for local odometry...")
+            return
+
+        if not self._target_initialized:
+            self._set_tracking_target_from_current_odom()
+
+        self._set_wrench_switch(False)
+        self._publish_tracking_point_target()
+
+        if self.last_attitude_thrust is None:
+            self._preflight_log_timer += 1
+            if self._preflight_log_timer % 100 == 1:
+                self.get_logger().info("Waiting for external controller setpoints...")
             return
 
         if self.mavros_state.mode != "OFFBOARD" and not self._offboard_requested:
@@ -291,7 +308,11 @@ class WallContactTester(Node):
             self.state = TestState.PREFLIGHT
             return
 
-        self._publish_velocity(0.0, 0.0, self.takeoff_vel)
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = self.takeoff_vel
+        self._command_target_z = self.takeoff_alt
+        self._publish_tracking_point_target()
 
         if self.current_alt >= self.takeoff_alt * 0.95:
             self.get_logger().info(
@@ -318,8 +339,11 @@ class WallContactTester(Node):
         if self._hover_t0 is None:
             self._hover_t0 = self.get_clock().now()
 
-        vz = self._altitude_hold_vz(self.takeoff_alt)
-        self._publish_velocity(0.0, 0.0, vz)
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = 0.0
+        self._command_target_z = self.takeoff_alt
+        self._publish_tracking_point_target()
 
         elapsed = (self.get_clock().now() - self._hover_t0).nanoseconds * 1e-9
         self.get_logger().info(
@@ -337,22 +361,23 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_approach(self) -> None:
-        vz = self._altitude_hold_vz(self.takeoff_alt)
+        self._advance_tracking_target(self.approach_velocity, 0.0, 0.0)
+        self._command_target_z = self.takeoff_alt
+        self._publish_tracking_point_target()
 
         if self.last_force_msg is None:
-            self._publish_velocity(self.approach_velocity, 0.0, vz)
             return
 
         if self.last_fx > self.force_threshold:
-            # Same cycle as contact: full zero velocity setpoint. Horizontal zero avoids shoving
-            # the wall; vertical zero avoids sending a vz altitude-hold command the same instant
-            # we hand off to wrench attitude/thrust (reduces an upward kick in PX4 offboard).
-            self._publish_velocity(0.0, 0.0, 0.0)
             self.get_logger().info(
                 f"Contact detected! Fx={self.last_fx:.3f} N "
                 f"(threshold={self.force_threshold:.2f} N)  "
                 f"alt={self.current_alt:.2f}m")
             self.hold_odom = self.last_odom
+            if self.hold_odom is not None:
+                p = self.hold_odom.pose.pose.position
+                self._set_tracking_target(float(p.x) + self.hold_x_offset, float(p.y), self.takeoff_alt)
+            self._publish_tracking_point_target()
             self._publish_wrench_setpoint()
             self._set_wrench_switch(True)
             self.contact_time = self.get_clock().now()
@@ -360,19 +385,13 @@ class WallContactTester(Node):
             self.get_logger().info(
                 "Switched to force control. Wrench controller now commands attitude/thrust.")
             self.state = TestState.HOLD_FORCE
-            return
-
-        self._publish_velocity(self.approach_velocity, 0.0, vz)
 
     # ------------------------------------------------------------------ #
     # HOLD_FORCE
     # ------------------------------------------------------------------ #
 
     def _step_hold_force(self) -> None:
-        # Do NOT publish velocity to MAVROS during force control — the wrench_controller
-        # publishes attitude+thrust via drone_interface_node -> mavros/setpoint_raw/attitude.
-        # Sending velocity setpoints simultaneously causes PX4 to follow velocity instead.
-        self._publish_tracking_point()
+        self._publish_tracking_point_target()
         self._publish_wrench_setpoint()
         self._set_wrench_switch(True)
 
@@ -433,8 +452,9 @@ class WallContactTester(Node):
     def _finish_hold(self) -> None:
         self._set_wrench_switch(False)
         self._retreat_t0 = self.get_clock().now()
-        if self.last_odom is not None:
-            self._retreat_pose_x0 = float(self.last_odom.pose.pose.position.x)
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = 0.0
         self.state = TestState.RETREAT
 
     # ------------------------------------------------------------------ #
@@ -446,8 +466,8 @@ class WallContactTester(Node):
             self._retreat_t0 = self.get_clock().now()
         elapsed = (self.get_clock().now() - self._retreat_t0).nanoseconds * 1e-9
 
-        self._publish_velocity(-self.retreat_velocity, 0.0, 0.0)
-        self._publish_tracking_follow_odom()
+        self._advance_tracking_target(-self.retreat_velocity, 0.0, 0.0)
+        self._publish_tracking_point_target()
         self._set_wrench_switch(False)
 
         self.get_logger().info(
@@ -458,7 +478,6 @@ class WallContactTester(Node):
         if elapsed >= self.retreat_duration_sec:
             self.get_logger().info("Retreat done. Landing.")
             self._land_t0 = None
-            self._land_z0 = None
             self.state = TestState.LAND
 
     # ------------------------------------------------------------------ #
@@ -468,10 +487,12 @@ class WallContactTester(Node):
     def _step_land(self) -> None:
         if self._land_t0 is None:
             self._land_t0 = self.get_clock().now()
-            self._land_z0 = float(self.last_odom.pose.pose.position.z) if self.last_odom else 1.0
 
-        self._publish_velocity(0.0, 0.0, -self.land_velocity)
-        self._publish_tracking_follow_odom()
+        self._advance_tracking_target(0.0, 0.0, -self.land_velocity)
+        if self._command_target_z < 0.0:
+            self._command_target_z = 0.0
+            self._command_vel_z = 0.0
+        self._publish_tracking_point_target()
         self._set_wrench_switch(False)
 
         self.get_logger().info(
@@ -493,8 +514,8 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_idle(self) -> None:
-        self._publish_velocity(0.0, 0.0, 0.0)
-        self._publish_tracking_follow_odom()
+        self._publish_tracking_point_target()
+        self._set_wrench_switch(False)
         if not self._idle_logged:
             self._idle_logged = True
             self.get_logger().info("Idle (landed / disarmed). Ctrl+C to exit.")
@@ -557,30 +578,65 @@ class WallContactTester(Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = self.map_frame_id
         t.child_frame_id = "contact"
-        t.transform.rotation.w = 1.0
+        # Match control_stack_base launch: map -> contact is yaw=pi.
+        t.transform.rotation.z = 1.0
+        t.transform.rotation.w = 0.0
         self.tf_broadcaster.sendTransform(t)
 
     # ------------------------------------------------------------------ #
     # Tracking point helpers
     # ------------------------------------------------------------------ #
 
-    def _publish_tracking_point(self) -> None:
-        if self.hold_odom is None:
-            return
-        p = self.hold_odom.pose.pose.position
-        msg = self._make_tracking_odometry(
-            float(p.x) + self.hold_x_offset, float(p.y), float(self.takeoff_alt))
-        self.tracking_point_pub.publish(msg)
-
-    def _publish_tracking_follow_odom(self) -> None:
+    def _set_tracking_target_from_current_odom(self) -> None:
         if self.last_odom is None:
             return
         p = self.last_odom.pose.pose.position
-        msg = self._make_tracking_odometry(float(p.x), float(p.y), float(p.z))
+        self._set_tracking_target(float(p.x), float(p.y), float(p.z))
+
+    def _set_tracking_target(self, target_x: float, target_y: float, target_z: float) -> None:
+        self._command_target_x = float(target_x)
+        self._command_target_y = float(target_y)
+        self._command_target_z = float(target_z)
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = 0.0
+        self._target_initialized = True
+
+    def _advance_tracking_target(self, vx: float, vy: float, vz: float) -> None:
+        if not self._target_initialized:
+            self._set_tracking_target_from_current_odom()
+            if not self._target_initialized:
+                return
+        self._command_vel_x = float(vx)
+        self._command_vel_y = float(vy)
+        self._command_vel_z = float(vz)
+        self._command_target_x += float(vx) * self._loop_period
+        self._command_target_y += float(vy) * self._loop_period
+        self._command_target_z += float(vz) * self._loop_period
+
+    def _publish_tracking_point_target(self) -> None:
+        if not self._target_initialized:
+            self._set_tracking_target_from_current_odom()
+            if not self._target_initialized:
+                return
+        msg = self._make_tracking_odometry(
+            self._command_target_x,
+            self._command_target_y,
+            self._command_target_z,
+            self._command_vel_x,
+            self._command_vel_y,
+            self._command_vel_z,
+        )
         self.tracking_point_pub.publish(msg)
 
     def _make_tracking_odometry(
-        self, target_x: float, target_y: float, target_z: float
+        self,
+        target_x: float,
+        target_y: float,
+        target_z: float,
+        vel_x: float = 0.0,
+        vel_y: float = 0.0,
+        vel_z: float = 0.0,
     ) -> Odometry:
         msg = Odometry()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -595,26 +651,14 @@ class WallContactTester(Node):
         msg.pose.pose.position.x = target_x
         msg.pose.pose.position.y = target_y
         msg.pose.pose.position.z = target_z
+        msg.twist.twist.linear.x = float(vel_x)
+        msg.twist.twist.linear.y = float(vel_y)
+        msg.twist.twist.linear.z = float(vel_z)
         return msg
 
     # ------------------------------------------------------------------ #
-    # Velocity / wrench helpers
+    # Wrench helpers
     # ------------------------------------------------------------------ #
-
-    def _publish_velocity(self, vx: float, vy: float, vz: float) -> None:
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "map"
-        msg.twist.linear.x = float(vx)
-        msg.twist.linear.y = float(vy)
-        msg.twist.linear.z = float(vz)
-        self.vel_pub.publish(msg)
-
-    def _altitude_hold_vz(self, z_ref: float) -> float:
-        err = float(z_ref) - float(self.current_alt)
-        vz = self.approach_altitude_kp * err
-        lim = max(0.0, float(self.approach_vz_limit))
-        return max(-lim, min(lim, vz))
 
     def _publish_wrench_setpoint(self) -> None:
         msg = WrenchStamped()
