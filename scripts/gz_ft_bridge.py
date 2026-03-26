@@ -57,10 +57,10 @@ class GzFtBridge(Node):
         self._reader_thread = threading.Thread(target=self._reader, daemon=True)
         self._reader_thread.start()
 
-        self._timer = self.create_timer(0.02, self._publish)  # 50 Hz
+        self._timer = self.create_timer(0.01, self._publish)  # 100 Hz
         self.get_logger().info(
             f"Bridging gz topic '{gz_topic}' -> ROS 2 '{ros_topic}' "
-            f"(frame_id='{frame_id}', 50 Hz)"
+            f"(frame_id='{frame_id}', 100 Hz)"
         )
 
     def _reader(self) -> None:
