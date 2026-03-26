@@ -14,7 +14,7 @@ def generate_launch_description():
             parameters=[
                 {'execute_target': 20.0},
                 {'drone_interface': 'PX4Interface'},
-                {'setpoint_rate': 50.0},
+                {'setpoint_rate': 100.0},
             ],
         ),
     ])

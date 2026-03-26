@@ -38,7 +38,7 @@ private:
   rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedPtr arming_client_;
   rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_client_;
   rclcpp::TimerBase::SharedPtr setpoint_timer_;
-  double setpoint_rate_hz_{50.0};
+  double setpoint_rate_hz_{100.0};
 };
 
 }  // namespace core_px4_interface

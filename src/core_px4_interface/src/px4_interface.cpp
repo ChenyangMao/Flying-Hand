@@ -22,7 +22,7 @@ void PX4Interface::initialize(rclcpp::Node * node)
   arming_client_ = node_->create_client<mavros_msgs::srv::CommandBool>("mavros/cmd/arming");
   set_mode_client_ = node_->create_client<mavros_msgs::srv::SetMode>("mavros/set_mode");
 
-  setpoint_rate_hz_ = node_->declare_parameter<double>("setpoint_rate", 50.0);
+  setpoint_rate_hz_ = node_->declare_parameter<double>("setpoint_rate", 100.0);
   setpoint_timer_ = node_->create_wall_timer(
     std::chrono::duration<double>(1.0 / setpoint_rate_hz_),
     std::bind(&PX4Interface::setpoint_timer_callback, this));
