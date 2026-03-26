@@ -71,6 +71,18 @@ ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 python3 scripts/gz_ft_bridge.py
 ```
 
+### One-command startup
+
+```
+./scripts/run_wrench_stack.sh
+```
+
+Optional environment overrides:
+
+```
+PX4_TARGET=gz_hexa_scorpion FCU_URL=udp://:14540@127.0.0.1:14580 ./scripts/run_wrench_stack.sh
+```
+
 ### Run test script
 
 ```
