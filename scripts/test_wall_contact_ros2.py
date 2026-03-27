@@ -57,17 +57,25 @@ class WallContactTester(Node):
 
         # --------------- parameters --------------- #
         self.declare_parameter("force_topic", "ft_data_filtered")
-        self.declare_parameter("force_threshold", 0.5)
+        self.declare_parameter("force_threshold", 1.8)
+        self.declare_parameter("contact_force_max", 6.0)
+        self.declare_parameter("contact_confirm_sec", 0.15)
+        self.declare_parameter("contact_alt_tolerance", 0.15)
         self.declare_parameter("desired_force", 3)
-        # Keep the final approach intentionally slow to avoid a large impact spike
-        # on first wall contact.
-        self.declare_parameter("approach_velocity", 0.05)
+        self.declare_parameter("approach_velocity", 0.03)
+        self.declare_parameter("contact_push_velocity", 0.01)
+        self.declare_parameter("contact_push_threshold", 0.8)
         self.declare_parameter("hold_time", 10.0)
         self.declare_parameter("force_hold_tolerance", 0.5)
         self.declare_parameter("max_hold_timeout", 90.0)
+        self.declare_parameter("hold_force_nudge_vel", 0.003)
+        self.declare_parameter("hold_force_nudge_deadband", 0.2)
+        self.declare_parameter("hold_force_nudge_max_x_offset", 0.05)
+        self.declare_parameter("hold_lateral_abort_y", 0.35)
+        self.declare_parameter("hold_vertical_abort_z", 0.25)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.5)
-        self.declare_parameter("takeoff_velocity", 0.5)
+        self.declare_parameter("takeoff_velocity", 0.3)
         self.declare_parameter("pre_approach_hold_sec", 2.0)
         self.declare_parameter("loop_rate", 100.0)
         self.declare_parameter("map_frame_id", "map")
@@ -75,7 +83,7 @@ class WallContactTester(Node):
         self.declare_parameter("base_link_frame_id", "base_link")
         self.declare_parameter("frd_frame_id", "base_link_frd")
         self.declare_parameter("sensor_offset_z", -0.3)
-        self.declare_parameter("hold_x_offset", 0.01)
+        self.declare_parameter("hold_x_offset", 0.0)
         self.declare_parameter("retreat_velocity", 0.08)
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
@@ -83,11 +91,22 @@ class WallContactTester(Node):
 
         force_topic = self.get_parameter("force_topic").value
         self.force_threshold = float(self.get_parameter("force_threshold").value)
+        self.contact_force_max = float(self.get_parameter("contact_force_max").value)
+        self.contact_confirm_sec = float(self.get_parameter("contact_confirm_sec").value)
+        self.contact_alt_tolerance = float(self.get_parameter("contact_alt_tolerance").value)
         self.desired_force = float(self.get_parameter("desired_force").value)
         self.approach_velocity = self.get_parameter("approach_velocity").value
+        self.contact_push_velocity = float(self.get_parameter("contact_push_velocity").value)
+        self.contact_push_threshold = float(self.get_parameter("contact_push_threshold").value)
         self.hold_time = float(self.get_parameter("hold_time").value)
         self.force_hold_tolerance = float(self.get_parameter("force_hold_tolerance").value)
         self.max_hold_timeout = float(self.get_parameter("max_hold_timeout").value)
+        self.hold_force_nudge_vel = float(self.get_parameter("hold_force_nudge_vel").value)
+        self.hold_force_nudge_deadband = float(self.get_parameter("hold_force_nudge_deadband").value)
+        self.hold_force_nudge_max_x_offset = float(
+            self.get_parameter("hold_force_nudge_max_x_offset").value)
+        self.hold_lateral_abort_y = float(self.get_parameter("hold_lateral_abort_y").value)
+        self.hold_vertical_abort_z = float(self.get_parameter("hold_vertical_abort_z").value)
         self.sensor_frame = self.get_parameter("sensor_frame").value
         self.takeoff_alt = self.get_parameter("takeoff_altitude").value
         self.takeoff_vel = self.get_parameter("takeoff_velocity").value
@@ -149,6 +168,7 @@ class WallContactTester(Node):
         self.last_force_msg: Optional[WrenchStamped] = None
         self.last_fx: float = 0.0
         self.contact_time: Optional[Time] = None
+        self._contact_candidate_since: Optional[Time] = None
         self._in_band_since: Optional[Time] = None
         self.hold_odom: Optional[Odometry] = None
         self._hover_t0: Optional[Time] = None
@@ -174,11 +194,16 @@ class WallContactTester(Node):
         self.get_logger().info(
             f"WallContactTester started. force_topic='{force_topic}', "
             f"approach_vel={self.approach_velocity:.2f} m/s, "
-            f"contact_threshold={self.force_threshold:.2f} N, "
+            f"contact_window=[{self.force_threshold:.2f}, {self.contact_force_max:.2f}] N, "
+            f"contact_confirm={self.contact_confirm_sec:.2f}s, "
+            f"contact_push_vel={self.contact_push_velocity:.2f} m/s, "
             f"desired_Fx={self.desired_force:.1f} N, "
             f"hold: {self.hold_time:.1f}s within "
             f"{self.desired_force:.1f}±{self.force_hold_tolerance:.2f} N, "
-            f"hold_x_offset={self.hold_x_offset:.2f}m."
+            f"hold_x_offset={self.hold_x_offset:.2f}m, "
+            f"hold_nudge={self.hold_force_nudge_vel:.3f}m/s, "
+            f"hold_y_abort={self.hold_lateral_abort_y:.2f}m, "
+            f"hold_z_abort={self.hold_vertical_abort_z:.2f}m."
         )
 
     # ------------------------------------------------------------------ #
@@ -361,36 +386,104 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_approach(self) -> None:
-        self._advance_tracking_target(self.approach_velocity, 0.0, 0.0)
+        approach_vel = self.approach_velocity
+        if self.last_fx >= self.contact_push_threshold:
+            approach_vel = self.contact_push_velocity
+        self._advance_tracking_target(approach_vel, 0.0, 0.0)
         self._command_target_z = self.takeoff_alt
         self._publish_tracking_point_target()
 
         if self.last_force_msg is None:
+            self._contact_candidate_since = None
             return
 
-        if self.last_fx > self.force_threshold:
+        now = self.get_clock().now()
+        alt_ok = abs(self.current_alt - self.takeoff_alt) <= self.contact_alt_tolerance
+        in_contact_window = self.force_threshold <= self.last_fx <= self.contact_force_max
+
+        if not alt_ok:
+            self._contact_candidate_since = None
             self.get_logger().info(
-                f"Contact detected! Fx={self.last_fx:.3f} N "
-                f"(threshold={self.force_threshold:.2f} N)  "
-                f"alt={self.current_alt:.2f}m")
-            self.hold_odom = self.last_odom
-            if self.hold_odom is not None:
-                p = self.hold_odom.pose.pose.position
-                self._set_tracking_target(float(p.x) + self.hold_x_offset, float(p.y), self.takeoff_alt)
-            self._publish_tracking_point_target()
-            self._publish_wrench_setpoint()
-            self._set_wrench_switch(True)
-            self.contact_time = self.get_clock().now()
-            self._in_band_since = None
-            self.get_logger().info(
-                "Switched to force control. Wrench controller now commands attitude/thrust.")
-            self.state = TestState.HOLD_FORCE
+                f"Contact candidate ignored due to altitude offset: "
+                f"alt={self.current_alt:.2f}m target={self.takeoff_alt:.2f}m",
+                throttle_duration_sec=1.0)
+            return
+
+        if self.last_fx > self.contact_force_max:
+            self._contact_candidate_since = None
+            self.get_logger().warn(
+                f"Ignoring contact spike Fx={self.last_fx:.3f} N "
+                f"(contact max={self.contact_force_max:.2f} N)",
+                throttle_duration_sec=1.0)
+            return
+
+        if not in_contact_window:
+            self._contact_candidate_since = None
+            return
+
+        if self._contact_candidate_since is None:
+            self._contact_candidate_since = now
+            return
+
+        contact_dwell = (now - self._contact_candidate_since).nanoseconds * 1e-9
+        if contact_dwell < self.contact_confirm_sec:
+            return
+
+        self.get_logger().info(
+            f"Contact detected! Fx={self.last_fx:.3f} N "
+            f"(window=[{self.force_threshold:.2f}, {self.contact_force_max:.2f}] N)  "
+            f"alt={self.current_alt:.2f}m")
+        self.hold_odom = self.last_odom
+        if self.hold_odom is not None:
+            p = self.hold_odom.pose.pose.position
+            self._set_tracking_target(float(p.x) + self.hold_x_offset, float(p.y), self.takeoff_alt)
+        self._publish_tracking_point_target()
+        self._publish_wrench_setpoint()
+        self._set_wrench_switch(True)
+        self.contact_time = now
+        self._contact_candidate_since = None
+        self._in_band_since = None
+        self.get_logger().info(
+            "Switched to force control. Wrench controller now commands attitude/thrust.")
+        self.state = TestState.HOLD_FORCE
 
     # ------------------------------------------------------------------ #
     # HOLD_FORCE
     # ------------------------------------------------------------------ #
 
     def _step_hold_force(self) -> None:
+        if self.hold_odom is not None and self.last_odom is not None:
+            hold_p = self.hold_odom.pose.pose.position
+            cur_p = self.last_odom.pose.pose.position
+
+            y_err = float(cur_p.y) - float(hold_p.y)
+            z_err = float(cur_p.z) - float(self.takeoff_alt)
+            if abs(y_err) > self.hold_lateral_abort_y:
+                self.get_logger().warn(
+                    f"Hold aborted due to lateral drift: dy={y_err:.3f}m "
+                    f"(limit {self.hold_lateral_abort_y:.3f}m)")
+                self._finish_hold()
+                return
+            if abs(z_err) > self.hold_vertical_abort_z:
+                self.get_logger().warn(
+                    f"Hold aborted due to vertical drift: dz={z_err:.3f}m "
+                    f"(limit {self.hold_vertical_abort_z:.3f}m)")
+                self._finish_hold()
+                return
+
+            desired_x = float(hold_p.x) + self.hold_x_offset
+            force_err = self.desired_force - self.last_fx
+            if abs(force_err) > self.hold_force_nudge_deadband:
+                desired_x += max(
+                    -self.hold_force_nudge_max_x_offset,
+                    min(
+                        self.hold_force_nudge_max_x_offset,
+                        force_err * self.hold_force_nudge_vel))
+            self._set_tracking_target(desired_x, float(hold_p.y), self.takeoff_alt)
+            self._command_vel_x = 0.0
+            self._command_vel_y = 0.0
+            self._command_vel_z = 0.0
+
         self._publish_tracking_point_target()
         self._publish_wrench_setpoint()
         self._set_wrench_switch(True)

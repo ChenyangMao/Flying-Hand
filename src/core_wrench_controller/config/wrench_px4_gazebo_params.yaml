@@ -8,7 +8,7 @@ wrench_controller:
 
     # Hybrid mix: lower pose weight on wall-normal so pose loop does not keep driving into the wall
     # after brief contact (matches control_stack_base tuning intent; sim may need <=0.6).
-    mix_vel_x: 0.5
+    mix_vel_x: 0.4
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
@@ -16,7 +16,7 @@ wrench_controller:
     velx_damping_coefficient: 0.15
 
     # Enable force PID on sensor-X for wall-contact control.
-    fx.P: 0.012
+    fx.P: 0.005
     fx.I: 0.09
     fx.D: 0.01
     fx.integral_threshold: 20.0

@@ -321,15 +321,7 @@ bool WrenchControlNode::execute()
         this->get_parameter("force_ff_coeffcient_bias").as_double(),
         wrench_controller_ff_force_,
         this->get_parameter("velx_damping_coefficient").as_double())) {
-      RCLCPP_WARN_THROTTLE(
-        this->get_logger(),
-        *this->get_clock(),
-        1000,
-        "calculate_thrust_torque() false; publishing pose-only thrust (check FT/setpoint).");
-      thrust_des = thrust_pose_des;
-      // Respect velocity mixing even in fallback: zero force-owned axes so the
-      // pose controller doesn't push on the wall-normal direction.
-      thrust_des.setX(mix_vel_x_ * thrust_pose_des.x());
+      return true;
     } else {
       tf2::Matrix3x3 vel_mat(
         mix_vel_x_, 0.0, 0.0,
@@ -346,7 +338,6 @@ bool WrenchControlNode::execute()
           force_constraint_vec,
           this->get_parameter("target_frame").as_string(),
           thrust_des)) {
-        // Same as control_stack_base ROS1: skip publishing this cycle if contact-frame TF fails.
         return true;
       }
 
@@ -356,11 +347,6 @@ bool WrenchControlNode::execute()
         wrench_controller_->meas_force_x(), wrench_controller_->target_force_x());
     }
   }
-
-  // Apply same tilt + magnitude limits as pose-only path. Mixed wrench+pose thrust was not
-  // passed through calculate_thrust(); without this, map-frame thrust can exceed thrust_max
-  // inconsistently, or mixed vectors need a single cap matching PX4Interface expectations.
-  pose_controller_->constrain_thrust(thrust_des);
 
   // Publish debug thrust vector (optional)
   if (thrust_debug_pub_) {
@@ -549,4 +535,3 @@ void WrenchControlNode::switch_callback(
 }
 
 }  // namespace wrench_controller
-
