@@ -8,7 +8,7 @@ wrench_controller:
 
     # Hybrid mix: lower pose weight on wall-normal so pose loop does not keep driving into the wall
     # after brief contact (matches control_stack_base tuning intent; sim may need <=0.6).
-    mix_vel_x: 0.7
+    mix_vel_x: 0.5
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
