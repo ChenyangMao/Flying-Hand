@@ -106,7 +106,7 @@ geometry_msgs::msg::WrenchStamped WrenchController::update_state(
       force_samples_.pop_front();
     }
 
-    // Median filter per axis
+    // Stage 1: Median filter per axis (outlier / spike rejection)
     {
       std::vector<double> sx;
       std::vector<double> sy;
@@ -131,15 +131,17 @@ geometry_msgs::msg::WrenchStamped WrenchController::update_state(
       force_median_filtered_.setZ(median(sz));
     }
 
-    // Mean filter over last N samples (bounded by mean_filter_max_buffer_size_)
+    // Stage 2: Mean filter over *median outputs* (smoothing after spike removal)
+    median_samples_.push_back(force_median_filtered_);
+    if (static_cast<int>(median_samples_.size()) > mean_filter_max_buffer_size_) {
+      median_samples_.pop_front();
+    }
     {
-      int count = 0;
       tf2::Vector3 acc(0.0, 0.0, 0.0);
-      for (auto it = force_samples_.rbegin();
-           it != force_samples_.rend() && count < mean_filter_max_buffer_size_;
-           ++it, ++count) {
-        acc += *it;
+      for (const auto & v : median_samples_) {
+        acc += v;
       }
+      const int count = static_cast<int>(median_samples_.size());
       if (count > 0) {
         force_mean_filtered_ = acc * (1.0 / static_cast<double>(count));
       } else {
@@ -147,7 +149,7 @@ geometry_msgs::msg::WrenchStamped WrenchController::update_state(
       }
     }
 
-    // Decide which filtered signal to use as measured force
+    // Use cascaded median→mean output as the measured force for control
     meas_force_sensor_frame_ =
       filter_ft_data_ ? force_mean_filtered_ : force_in_sensor;
     meas_torque_sensor_frame_ = torque_in_sensor;
@@ -171,12 +173,78 @@ geometry_msgs::msg::WrenchStamped WrenchController::update_state(
 
 void WrenchController::update_odom_state(
   const nav_msgs::msg::Odometry & odom,
-  const tf2_ros::Buffer &)
+  const tf2_ros::Buffer & tf_buffer)
 {
-  odometry_vel_world_frame_ = tf2::Vector3(
-    odom.twist.twist.linear.x,
-    odom.twist.twist.linear.y,
-    odom.twist.twist.linear.z);
+  try {
+    geometry_msgs::msg::TransformStamped odom_pos_to_world_tf =
+      tf_buffer.lookupTransform(world_frame_, odom.header.frame_id, tf2::TimePointZero);
+    geometry_msgs::msg::TransformStamped odom_vel_to_world_tf =
+      tf_buffer.lookupTransform(world_frame_, odom.child_frame_id, tf2::TimePointZero);
+
+    tf2::Transform pos_tf;
+    tf2::fromMsg(odom_pos_to_world_tf.transform, pos_tf);
+
+    tf2::Transform vel_tf;
+    tf2::fromMsg(odom_vel_to_world_tf.transform, vel_tf);
+    vel_tf.setOrigin(tf2::Vector3(0, 0, 0));
+
+    odometry_pos_world_frame_ = pos_tf * tf2::Vector3(
+      odom.pose.pose.position.x,
+      odom.pose.pose.position.y,
+      odom.pose.pose.position.z);
+
+    odometry_vel_world_frame_ = vel_tf * tf2::Vector3(
+      odom.twist.twist.linear.x,
+      odom.twist.twist.linear.y,
+      odom.twist.twist.linear.z);
+  } catch (const tf2::TransformException &) {
+    odometry_pos_world_frame_ = tf2::Vector3(
+      odom.pose.pose.position.x,
+      odom.pose.pose.position.y,
+      odom.pose.pose.position.z);
+    odometry_vel_world_frame_ = tf2::Vector3(
+      odom.twist.twist.linear.x,
+      odom.twist.twist.linear.y,
+      odom.twist.twist.linear.z);
+  }
+}
+
+void WrenchController::update_tracking_target(
+  const nav_msgs::msg::Odometry & target,
+  const tf2_ros::Buffer & tf_buffer)
+{
+  try {
+    geometry_msgs::msg::TransformStamped target_pos_to_world_tf =
+      tf_buffer.lookupTransform(world_frame_, target.header.frame_id, tf2::TimePointZero);
+    geometry_msgs::msg::TransformStamped target_vel_to_world_tf =
+      tf_buffer.lookupTransform(world_frame_, target.child_frame_id, tf2::TimePointZero);
+
+    tf2::Transform pos_tf;
+    tf2::fromMsg(target_pos_to_world_tf.transform, pos_tf);
+
+    tf2::Transform vel_tf;
+    tf2::fromMsg(target_vel_to_world_tf.transform, vel_tf);
+    vel_tf.setOrigin(tf2::Vector3(0, 0, 0));
+
+    tracking_target_pos_world_frame_ = pos_tf * tf2::Vector3(
+      target.pose.pose.position.x,
+      target.pose.pose.position.y,
+      target.pose.pose.position.z);
+
+    tracking_target_vel_world_frame_ = vel_tf * tf2::Vector3(
+      target.twist.twist.linear.x,
+      target.twist.twist.linear.y,
+      target.twist.twist.linear.z);
+  } catch (const tf2::TransformException &) {
+    tracking_target_pos_world_frame_ = tf2::Vector3(
+      target.pose.pose.position.x,
+      target.pose.pose.position.y,
+      target.pose.pose.position.z);
+    tracking_target_vel_world_frame_ = tf2::Vector3(
+      target.twist.twist.linear.x,
+      target.twist.twist.linear.y,
+      target.twist.twist.linear.z);
+  }
 }
 
 bool WrenchController::calculate_thrust_torque(
@@ -263,6 +331,12 @@ bool WrenchController::calculate_thrust_torque(
     }
 
     thrust_des = sensor_to_thrust_output_tf * last_thrust_des;
+
+    const double x_pos_error =
+      tracking_target_pos_world_frame_.x() - odometry_pos_world_frame_.x();
+    const double x_vel_error =
+      tracking_target_vel_world_frame_.x() - odometry_vel_world_frame_.x();
+    thrust_des.setX(thrust_des.x() + x_hold_p_ * x_pos_error + x_hold_d_ * x_vel_error);
 
     thrust_des[1] += wrench_controller_ff_force[1];
     thrust_des[2] += wrench_controller_ff_force[2];
@@ -363,5 +437,10 @@ void WrenchController::configure_fz(
   fz_controller_.set_maximum(maximum);
 }
 
-}  // namespace wrench_controller
+void WrenchController::configure_x_hold_pd(double p, double d)
+{
+  x_hold_p_ = p;
+  x_hold_d_ = d;
+}
 
+}  // namespace wrench_controller

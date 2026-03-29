@@ -37,6 +37,7 @@ bool PoseControlNode::initialize()
   // Other controller parameters
   std::string target_frame_str =
     this->declare_parameter<std::string>("target_frame", "map");
+  target_frame_ = target_frame_str;
   double xy_vel_limit = this->declare_parameter<double>("max_xy_vel", 12.0);
   double hover_thrust = this->declare_parameter<double>("hover_thrust", 0.5);
   double voltage_compensation_gain =
@@ -160,13 +161,15 @@ bool PoseControlNode::execute()
     pose_controller_->calculate_attitude_thrust(thrust_des);
 
   mav_msgs::msg::AttitudeThrust drone_cmd;
-  drone_cmd.attitude.x = 0.0;
-  drone_cmd.attitude.y = 0.0;
-  drone_cmd.attitude.z = 0.0;
-  drone_cmd.attitude.w = 1.0;
-  drone_cmd.thrust.x = thrust_des.x();
-  drone_cmd.thrust.y = thrust_des.y();
-  drone_cmd.thrust.z = thrust_des.z();
+  drone_cmd.header.stamp = this->now();
+  drone_cmd.header.frame_id = target_frame_;
+  drone_cmd.attitude.x = att_sp.x();
+  drone_cmd.attitude.y = att_sp.y();
+  drone_cmd.attitude.z = att_sp.z();
+  drone_cmd.attitude.w = att_sp.w();
+  drone_cmd.thrust.x = total_thrust.x();
+  drone_cmd.thrust.y = total_thrust.y();
+  drone_cmd.thrust.z = total_thrust.z();
 
   if (should_publish_ && command_pub_) {
     command_pub_->publish(drone_cmd);
@@ -229,4 +232,3 @@ void PoseControlNode::publish_control_callback(
 }
 
 }  // namespace pose_controller
-

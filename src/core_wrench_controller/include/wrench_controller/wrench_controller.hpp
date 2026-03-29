@@ -47,6 +47,10 @@ public:
     const nav_msgs::msg::Odometry & odom,
     const tf2_ros::Buffer & tf_buffer);
 
+  void update_tracking_target(
+    const nav_msgs::msg::Odometry & target,
+    const tf2_ros::Buffer & tf_buffer);
+
   bool calculate_thrust_torque(
     tf2::Vector3 & thrust_des,
     tf2::Vector3 & torque_des,
@@ -87,6 +91,8 @@ public:
     double minimum,
     double maximum);
 
+  void configure_x_hold_pd(double p, double d);
+
   double meas_force_x() const { return meas_force_sensor_frame_.x(); }
   double target_force_x() const { return target_force_sensor_frame_.x(); }
 
@@ -115,8 +121,9 @@ private:
   int median_filter_max_buffer_size_{0};
   int mean_filter_max_buffer_size_{0};
 
-  // Simple buffers for median/mean filtering of force measurements
-  std::deque<tf2::Vector3> force_samples_;
+  // Two-stage filtering: raw → median (outlier rejection) → mean (smoothing)
+  std::deque<tf2::Vector3> force_samples_;          // raw input buffer (median window)
+  std::deque<tf2::Vector3> median_samples_;          // median output buffer (mean window)
   tf2::Vector3 force_median_filtered_{0.0, 0.0, 0.0};
   tf2::Vector3 force_mean_filtered_{0.0, 0.0, 0.0};
 
@@ -129,6 +136,12 @@ private:
   tf2::Vector3 meas_force_sensor_frame_;
   tf2::Vector3 meas_torque_sensor_frame_;
   tf2::Vector3 odometry_vel_world_frame_;
+  tf2::Vector3 odometry_pos_world_frame_;
+  tf2::Vector3 tracking_target_pos_world_frame_;
+  tf2::Vector3 tracking_target_vel_world_frame_;
+
+  double x_hold_p_{0.0};
+  double x_hold_d_{0.0};
 
   double thrust_vel_damping_{0.0};
 
@@ -138,4 +151,3 @@ private:
 }  // namespace wrench_controller
 
 #endif  // ROS2_CONTROL_STACK_WRENCH_CONTROLLER_HPP_
-

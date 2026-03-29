@@ -8,21 +8,35 @@ wrench_controller:
 
     # Hybrid mix: lower pose weight on wall-normal so pose loop does not keep driving into the wall
     # after brief contact (matches control_stack_base tuning intent; sim may need <=0.6).
-    mix_vel_x: 0.4
+    mix_vel_x: 0.0
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
     # Same parameter as ROS1 control_stack_base (damps vz in force calculation).
     velx_damping_coefficient: 0.15
 
-    # Enable force PID on sensor-X for wall-contact control.
-    fx.P: 0.005
-    fx.I: 0.09
-    fx.D: 0.01
+    # For diagnosis: disable wall-normal force feedforward so we can verify
+    # the PID term alone drives wrench_x in the expected direction.
+    force_ff_coefficient: 0.0
+    force_ff_coeffcient_bias: 0.0
+
+    # Hybrid force/position control on sensor-X (wall-normal):
+    #   Force PI tracks the desired contact force (fx setpoint).
+    #   Position PD (x_hold) provides damping around the contact reference.
+    fx.P: 0.008
+    fx.I: 0.005
+    fx.D: 0.0
     fx.integral_threshold: 20.0
     fx.min: -0.8
     fx.max: 0.8
 
-    # Reduce filter buffer to lower latency (10 samples @ 100 Hz = 100 ms).
-    mean_filter_max_buffer_size: 10
-    median_filter_max_buffer_size: 15
+    # x-direction position PD damping inside wrench control (contact hold).
+    x_hold.P: 0.0 #0.18
+    x_hold.D: 0.12 #0.12
+
+    # Two-stage cascade filter @ 100 Hz input:
+    #   Stage 1 — median (spike rejection): 11 samples = 110 ms window
+    #   Stage 2 — mean (smoothing over median outputs): 7 samples
+    # Total effective latency ~110 ms, acceptable for 40 Hz control loop.
+    median_filter_max_buffer_size: 11
+    mean_filter_max_buffer_size: 7

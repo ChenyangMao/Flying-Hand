@@ -147,6 +147,8 @@ bool WrenchControlNode::initialize()
   const double fx_neg_i = this->declare_parameter<double>("fx.neg_I", 0.0);
   const double fx_neg_d = this->declare_parameter<double>("fx.neg_D", 0.0);
   const double fx_neg_ff = this->declare_parameter<double>("fx.neg_FF", 0.0);
+  const double x_hold_p = this->declare_parameter<double>("x_hold.P", 0.0);
+  const double x_hold_d = this->declare_parameter<double>("x_hold.D", 0.0);
 
   const double fy_p = this->declare_parameter<double>("fy.P", 0.0);
   const double fy_d = this->declare_parameter<double>("fy.D", 0.0);
@@ -223,10 +225,6 @@ bool WrenchControlNode::initialize()
   filtered_ft_data_pub_ =
     this->create_publisher<geometry_msgs::msg::WrenchStamped>("ft_data_filtered", 10);
 
-  // Wrench setpoint publisher (for debugging/monitoring, optional)
-  ft_setpoint_pub_ =
-    this->create_publisher<geometry_msgs::msg::WrenchStamped>("ft_setpoint", 10);
-
   // Core wrench controller instance
   wrench_controller_ = std::make_unique<wrench_controller::WrenchController>(
     sensor_frame,
@@ -245,13 +243,14 @@ bool WrenchControlNode::initialize()
     fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max, fx_ff, fx_constant);
   wrench_controller_->configure_fx_negative_gains(
     fx_use_negative_gains, fx_neg_p, fx_neg_i, fx_neg_d, fx_neg_ff);
+  wrench_controller_->configure_x_hold_pd(x_hold_p, x_hold_d);
   wrench_controller_->configure_fy(fy_p, fy_d, fy_min, fy_max);
   wrench_controller_->configure_fz(
     fz_p, fz_i, fz_d, fz_integral_threshold, fz_min, fz_max);
   RCLCPP_INFO(
     this->get_logger(),
-    "Force PID fx: P=%.4f I=%.4f D=%.4f, i_th=%.3f, out=[%.3f, %.3f]",
-    fx_p, fx_i, fx_d, fx_integral_threshold, fx_min, fx_max);
+    "Force PI/PD: fx(P=%.4f I=%.4f D=%.4f), x_hold(P=%.4f D=%.4f), out=[%.3f, %.3f]",
+    fx_p, fx_i, fx_d, x_hold_p, x_hold_d, fx_min, fx_max);
 
   // Subscriptions for F/T data, setpoint and odometry
   ft_data_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
@@ -294,8 +293,8 @@ bool WrenchControlNode::execute()
 
   // Pose controller: compute desired thrust from motion control
   tf2::Vector3 thrust_pose_des;
-  tf2::Quaternion att_des;
-  if (!pose_controller_->calculate_thrust(thrust_pose_des, att_des)) {
+  tf2::Quaternion pose_target_att;
+  if (!pose_controller_->calculate_thrust(thrust_pose_des, pose_target_att)) {
     return true;
   }
 
@@ -306,14 +305,15 @@ bool WrenchControlNode::execute()
     "POS CTRL  pose_thrust_xyz=(%.4f, %.4f, %.4f)",
     thrust_pose_des.x(), thrust_pose_des.y(), thrust_pose_des.z());
 
+  // Before contact: pose controller handles xyz
   tf2::Vector3 thrust_des = thrust_pose_des;
 
-  // When in motion-force control mode, mix wrench-based thrust with pose-based thrust.
+  // After contact: wrench handles x (force PI + position PD damping), pose handles yz
   if (mode_switch_) {
     tf2::Vector3 thrust_wrench_des;
     tf2::Vector3 torque_wrench_des;
 
-    if (!wrench_controller_->calculate_thrust_torque(
+    if (wrench_controller_->calculate_thrust_torque(
         thrust_wrench_des,
         torque_wrench_des,
         *tf_buffer_,
@@ -321,30 +321,17 @@ bool WrenchControlNode::execute()
         this->get_parameter("force_ff_coeffcient_bias").as_double(),
         wrench_controller_ff_force_,
         this->get_parameter("velx_damping_coefficient").as_double())) {
-      return true;
-    } else {
-      tf2::Matrix3x3 vel_mat(
-        mix_vel_x_, 0.0, 0.0,
-        0.0, mix_vel_y_, 0.0,
-        0.0, 0.0, mix_vel_z_);
-      tf2::Vector3 contact_normal(-1.0, 0.0, 0.0);
-      tf2::Vector3 force_constraint_vec(0.0, 0.0, 0.0);
-
-      if (!combine_motion_and_force(
-          thrust_wrench_des,
-          thrust_pose_des,
-          contact_normal,
-          vel_mat,
-          force_constraint_vec,
-          this->get_parameter("target_frame").as_string(),
-          thrust_des)) {
-        return true;
-      }
+      // Hybrid: x from wrench (force PI + position PD), yz from pose
+      thrust_des.setX(thrust_wrench_des.x());
 
       RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        "FC OK  wrench_x=%.4f  pose_x=%.4f  mixed_x=%.4f  meas=%.3f tgt=%.3f",
-        thrust_wrench_des.x(), thrust_pose_des.x(), thrust_des.x(),
-        wrench_controller_->meas_force_x(), wrench_controller_->target_force_x());
+        "HYBRID  wrench_x=%.4f  pose_y=%.4f  pose_z=%.4f  meas_fx=%.3f  tgt_fx=%.3f  err_fx=%.3f",
+        thrust_wrench_des.x(),
+        thrust_des.y(),
+        thrust_des.z(),
+        wrench_controller_->meas_force_x(),
+        wrench_controller_->target_force_x(),
+        wrench_controller_->target_force_x() - wrench_controller_->meas_force_x());
     }
   }
 
@@ -360,21 +347,23 @@ bool WrenchControlNode::execute()
 
   // Generate and publish attitude + thrust command
   mav_msgs::msg::AttitudeThrust drone_cmd;
+  drone_cmd.header.stamp = this->now();
+  drone_cmd.header.frame_id = this->get_parameter("target_frame").as_string();
 
-  // For now, mirror PoseControlNode behavior: use roll/pitch/yaw from att_des if valid,
-  // but default to identity when zero.
-  if (att_des.x() == 0.0 && att_des.y() == 0.0 &&
-      att_des.z() == 0.0 && att_des.w() == 0.0) {
-    att_des.setValue(0.0, 0.0, 0.0, 1.0);
-  }
+  // Recompute the executable attitude from the final mixed thrust vector.
+  // PX4 consumes a scalar thrust plus attitude, so attitude must align with the
+  // commanded thrust direction; otherwise x/y thrust components are not realized.
+  tf2::Quaternion att_des;
+  tf2::Vector3 thrust_exec;
+  std::tie(att_des, thrust_exec) = pose_controller_->calculate_attitude_thrust(thrust_des);
 
   drone_cmd.attitude.x = att_des.x();
   drone_cmd.attitude.y = att_des.y();
   drone_cmd.attitude.z = att_des.z();
   drone_cmd.attitude.w = att_des.w();
-  drone_cmd.thrust.x = thrust_des.x();
-  drone_cmd.thrust.y = thrust_des.y();
-  drone_cmd.thrust.z = thrust_des.z();
+  drone_cmd.thrust.x = thrust_exec.x();
+  drone_cmd.thrust.y = thrust_exec.y();
+  drone_cmd.thrust.z = thrust_exec.z();
 
   if (should_publish_ && command_pub_) {
     command_pub_->publish(drone_cmd);
@@ -492,15 +481,14 @@ void WrenchControlNode::ft_setpoint_callback(
   }
 
   wrench_controller_->update_target(*msg, *tf_buffer_);
-
-  if (ft_setpoint_pub_) {
-    ft_setpoint_pub_->publish(*msg);
-  }
 }
 
 void WrenchControlNode::tracking_point_callback(
   const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  if (wrench_controller_) {
+    wrench_controller_->update_tracking_target(*msg, *tf_buffer_);
+  }
   if (pose_controller_) {
     pose_controller_->update_target(*msg, *tf_buffer_);
   }

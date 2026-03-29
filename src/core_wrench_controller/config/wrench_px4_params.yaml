@@ -42,7 +42,7 @@ wrench_controller:
       min: [-0.3, -0.3, -0.5]
       max: [0.3, 0.3, 0.5]
 
-    execute_target: 100.0
+    execute_target: 40.0
 
     fx.P: 0.0012
     fx.I: 0.009
@@ -50,6 +50,11 @@ wrench_controller:
     fx.integral_threshold: 20.0
     fx.min: -0.8
     fx.max: 0.8
+
+    # Contact-hold x-position damping inside wrench control.
+    # This is a PD term on x position/velocity error, added only to wrench x.
+    x_hold.P: 0.0
+    x_hold.D: 0.0
 
     fy.P: 0.0
     fy.D: 0.0

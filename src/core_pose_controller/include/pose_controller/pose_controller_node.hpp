@@ -50,6 +50,7 @@ private:
 
   // Variables
   bool should_publish_{true};
+  std::string target_frame_{"map"};
 
   // Core pose controller and TF
   std::unique_ptr<pose_controller::PoseController> pose_controller_;
@@ -68,4 +69,3 @@ private:
 }  // namespace pose_controller
 
 #endif  // ROS2_CONTROL_STACK_POSE_CONTROLLER_NODE_HPP_
-

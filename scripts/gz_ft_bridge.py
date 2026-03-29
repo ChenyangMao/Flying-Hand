@@ -47,6 +47,7 @@ class GzFtBridge(Node):
         self.frame_id = frame_id
         self.gz_topic = gz_topic
 
+        self._lock = threading.Lock()
         self._force = [0.0, 0.0, 0.0]
         self._torque = [0.0, 0.0, 0.0]
 
@@ -64,9 +65,15 @@ class GzFtBridge(Node):
         )
 
     def _reader(self) -> None:
-        """Parse the text-protobuf output of `gz topic -e`."""
+        """Parse the text-protobuf output of `gz topic -e`.
+
+        Writes to shared state only when a complete force+torque message
+        has been parsed, preventing cross-frame contamination.
+        """
         section = None
         idx_map = {"x": 0, "y": 1, "z": 2}
+        tmp_force = [0.0, 0.0, 0.0]
+        tmp_torque = [0.0, 0.0, 0.0]
         for line in iter(self._proc.stdout.readline, ""):
             s = line.strip()
             if s.startswith("force"):
@@ -74,6 +81,10 @@ class GzFtBridge(Node):
             elif s.startswith("torque"):
                 section = "t"
             elif s == "}":
+                if section == "t":
+                    with self._lock:
+                        self._force[:] = tmp_force
+                        self._torque[:] = tmp_torque
                 section = None
             elif section and ":" in s:
                 key, _, val = s.partition(":")
@@ -82,9 +93,9 @@ class GzFtBridge(Node):
                     try:
                         v = float(val.strip())
                         if section == "f":
-                            self._force[idx_map[key]] = v
+                            tmp_force[idx_map[key]] = v
                         else:
-                            self._torque[idx_map[key]] = v
+                            tmp_torque[idx_map[key]] = v
                     except ValueError:
                         pass
 
@@ -92,12 +103,13 @@ class GzFtBridge(Node):
         msg = WrenchStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.frame_id
-        msg.wrench.force.x = self._force[0]
-        msg.wrench.force.y = self._force[1]
-        msg.wrench.force.z = self._force[2]
-        msg.wrench.torque.x = self._torque[0]
-        msg.wrench.torque.y = self._torque[1]
-        msg.wrench.torque.z = self._torque[2]
+        with self._lock:
+            msg.wrench.force.x = self._force[0]
+            msg.wrench.force.y = self._force[1]
+            msg.wrench.force.z = self._force[2]
+            msg.wrench.torque.x = self._torque[0]
+            msg.wrench.torque.y = self._torque[1]
+            msg.wrench.torque.z = self._torque[2]
         self.pub.publish(msg)
 
     def destroy_node(self) -> None:

@@ -102,7 +102,6 @@ void PX4Interface::command_attitude_thrust(const mav_msgs::msg::AttitudeThrust &
 
   last_attitude_target_ = att;
   has_last_command_ = true;
-  attitude_target_pub_->publish(att);
 }
 
 void PX4Interface::command_velocity(geometry_msgs::msg::TwistStamped msg)

@@ -7,6 +7,12 @@ The test drives the UAV entirely through the external controller stack:
 `wrench_controller/switch` are used only during contact hold. No MAVROS
 velocity setpoints are sent during the mission.
 
+Control split:
+  - Before contact: Pose controller tracks tracking_point on x/y/z.
+  - After contact: tracking_point keeps y/z only, while wrench control owns x.
+    The published tracking_point.x is just an x reference for the wrench
+    controller's internal x-position damping term.
+
 After the contact force (sensor Fx in ft_sensor frame) stays within the
 desired band continuously for ``hold_time`` seconds, the drone retreats,
 descends, and disarms.
@@ -61,12 +67,13 @@ class WallContactTester(Node):
         self.declare_parameter("contact_force_max", 6.0)
         self.declare_parameter("contact_confirm_sec", 0.15)
         self.declare_parameter("contact_alt_tolerance", 0.15)
-        self.declare_parameter("desired_force", 3)
-        self.declare_parameter("approach_velocity", 0.03)
+        self.declare_parameter("desired_force", 5.0)
+        self.declare_parameter("use_contact_force_sign_for_setpoint", True)
+        self.declare_parameter("approach_velocity", 0.1)
         self.declare_parameter("contact_push_velocity", 0.01)
         self.declare_parameter("contact_push_threshold", 0.8)
-        self.declare_parameter("hold_time", 10.0)
-        self.declare_parameter("force_hold_tolerance", 0.5)
+        self.declare_parameter("hold_time", 20.0)
+        self.declare_parameter("force_hold_tolerance", 1.0)
         self.declare_parameter("max_hold_timeout", 90.0)
         self.declare_parameter("hold_force_nudge_vel", 0.003)
         self.declare_parameter("hold_force_nudge_deadband", 0.2)
@@ -95,6 +102,8 @@ class WallContactTester(Node):
         self.contact_confirm_sec = float(self.get_parameter("contact_confirm_sec").value)
         self.contact_alt_tolerance = float(self.get_parameter("contact_alt_tolerance").value)
         self.desired_force = float(self.get_parameter("desired_force").value)
+        self.use_contact_force_sign_for_setpoint = bool(
+            self.get_parameter("use_contact_force_sign_for_setpoint").value)
         self.approach_velocity = self.get_parameter("approach_velocity").value
         self.contact_push_velocity = float(self.get_parameter("contact_push_velocity").value)
         self.contact_push_threshold = float(self.get_parameter("contact_push_threshold").value)
@@ -166,11 +175,14 @@ class WallContactTester(Node):
         # --------------- internal state --------------- #
         self.state = TestState.PREFLIGHT
         self.last_force_msg: Optional[WrenchStamped] = None
-        self.last_fx: float = 0.0
+        self.last_fx_raw: float = 0.0
+        self.last_fx_abs: float = 0.0
+        self.active_force_setpoint_x: float = self.desired_force
         self.contact_time: Optional[Time] = None
         self._contact_candidate_since: Optional[Time] = None
         self._in_band_since: Optional[Time] = None
         self.hold_odom: Optional[Odometry] = None
+        self.hold_x_reference: Optional[float] = None
         self._hover_t0: Optional[Time] = None
         self._arm_requested = False
         self._offboard_requested = False
@@ -200,8 +212,8 @@ class WallContactTester(Node):
             f"desired_Fx={self.desired_force:.1f} N, "
             f"hold: {self.hold_time:.1f}s within "
             f"{self.desired_force:.1f}±{self.force_hold_tolerance:.2f} N, "
-            f"hold_x_offset={self.hold_x_offset:.2f}m, "
-            f"hold_nudge={self.hold_force_nudge_vel:.3f}m/s, "
+            f"x_hold_ref_offset={self.hold_x_offset:.2f}m, "
+            f"(script x-nudge disabled; wrench owns x after contact), "
             f"hold_y_abort={self.hold_lateral_abort_y:.2f}m, "
             f"hold_z_abort={self.hold_vertical_abort_z:.2f}m."
         )
@@ -219,7 +231,8 @@ class WallContactTester(Node):
 
     def _ft_callback(self, msg: WrenchStamped) -> None:
         self.last_force_msg = msg
-        self.last_fx = abs(float(msg.wrench.force.x))
+        self.last_fx_raw = float(msg.wrench.force.x)
+        self.last_fx_abs = abs(self.last_fx_raw)
 
     def _attitude_thrust_cb(self, msg: AttitudeThrust) -> None:
         self.last_attitude_thrust = msg
@@ -387,7 +400,7 @@ class WallContactTester(Node):
 
     def _step_approach(self) -> None:
         approach_vel = self.approach_velocity
-        if self.last_fx >= self.contact_push_threshold:
+        if self.last_fx_abs >= self.contact_push_threshold:
             approach_vel = self.contact_push_velocity
         self._advance_tracking_target(approach_vel, 0.0, 0.0)
         self._command_target_z = self.takeoff_alt
@@ -399,7 +412,7 @@ class WallContactTester(Node):
 
         now = self.get_clock().now()
         alt_ok = abs(self.current_alt - self.takeoff_alt) <= self.contact_alt_tolerance
-        in_contact_window = self.force_threshold <= self.last_fx <= self.contact_force_max
+        in_contact_window = self.force_threshold <= self.last_fx_abs <= self.contact_force_max
 
         if not alt_ok:
             self._contact_candidate_since = None
@@ -409,10 +422,10 @@ class WallContactTester(Node):
                 throttle_duration_sec=1.0)
             return
 
-        if self.last_fx > self.contact_force_max:
+        if self.last_fx_abs > self.contact_force_max:
             self._contact_candidate_since = None
             self.get_logger().warn(
-                f"Ignoring contact spike Fx={self.last_fx:.3f} N "
+                f"Ignoring contact spike |Fx|={self.last_fx_abs:.3f} N "
                 f"(contact max={self.contact_force_max:.2f} N)",
                 throttle_duration_sec=1.0)
             return
@@ -429,14 +442,24 @@ class WallContactTester(Node):
         if contact_dwell < self.contact_confirm_sec:
             return
 
+        measured_contact_fx = self.last_fx_raw
+        if self.use_contact_force_sign_for_setpoint and abs(measured_contact_fx) > 1e-6:
+            self.active_force_setpoint_x = abs(self.desired_force) * (
+                1.0 if measured_contact_fx >= 0.0 else -1.0)
+        else:
+            self.active_force_setpoint_x = self.desired_force
+
         self.get_logger().info(
-            f"Contact detected! Fx={self.last_fx:.3f} N "
+            f"Contact detected! raw Fx={self.last_fx_raw:.3f} N  "
+            f"|Fx|={self.last_fx_abs:.3f} N  "
             f"(window=[{self.force_threshold:.2f}, {self.contact_force_max:.2f}] N)  "
-            f"alt={self.current_alt:.2f}m")
+            f"alt={self.current_alt:.2f}m  "
+            f"setpoint Fx={self.active_force_setpoint_x:.3f} N")
         self.hold_odom = self.last_odom
         if self.hold_odom is not None:
             p = self.hold_odom.pose.pose.position
-            self._set_tracking_target(float(p.x) + self.hold_x_offset, float(p.y), self.takeoff_alt)
+            self.hold_x_reference = float(p.x) + self.hold_x_offset
+            self._set_tracking_target(self.hold_x_reference, float(p.y), self.takeoff_alt)
         self._publish_tracking_point_target()
         self._publish_wrench_setpoint()
         self._set_wrench_switch(True)
@@ -471,14 +494,7 @@ class WallContactTester(Node):
                 self._finish_hold()
                 return
 
-            desired_x = float(hold_p.x) + self.hold_x_offset
-            force_err = self.desired_force - self.last_fx
-            if abs(force_err) > self.hold_force_nudge_deadband:
-                desired_x += max(
-                    -self.hold_force_nudge_max_x_offset,
-                    min(
-                        self.hold_force_nudge_max_x_offset,
-                        force_err * self.hold_force_nudge_vel))
+            desired_x = self.hold_x_reference if self.hold_x_reference is not None else float(hold_p.x)
             self._set_tracking_target(desired_x, float(hold_p.y), self.takeoff_alt)
             self._command_vel_x = 0.0
             self._command_vel_y = 0.0
@@ -495,7 +511,7 @@ class WallContactTester(Node):
         now = self.get_clock().now()
         t_total = (now - self.contact_time).nanoseconds * 1e-9
 
-        in_band = abs(self.last_fx - self.desired_force) <= self.force_hold_tolerance
+        in_band = abs(self.last_fx_raw - self.active_force_setpoint_x) <= self.force_hold_tolerance
 
         if in_band:
             if self._in_band_since is None:
@@ -510,16 +526,18 @@ class WallContactTester(Node):
         log_msg = (
             f"Hold  t_in_band={t_in_band:.1f}/{self.hold_time:.1f}s  "
             f"t_fc={t_total:.1f}s  in_band={in_band}  "
-            f"alt={self.current_alt:.2f}m  Fx={self.last_fx:.3f} N"
+            f"alt={self.current_alt:.2f}m  "
+            f"Fx_raw={self.last_fx_raw:.3f} N  |Fx|={self.last_fx_abs:.3f} N  "
+            f"Fx_sp={self.active_force_setpoint_x:.3f} N"
         )
         if self.hold_odom is not None and self.last_odom is not None:
             hp = self.hold_odom.pose.pose.position
             cp = self.last_odom.pose.pose.position
-            tx = float(hp.x) + self.hold_x_offset
-            ty = float(hp.y)
+            tx = self.hold_x_reference if self.hold_x_reference is not None else float(hp.x)
+            ty = float(cp.y)
             tz = float(self.takeoff_alt)
             log_msg += (
-                f"  target_pos=({tx:.3f},{ty:.3f},{tz:.3f})  "
+                f"  target_ref=({tx:.3f},{ty:.3f},{tz:.3f})  "
                 f"current_pos=({cp.x:.3f},{cp.y:.3f},{cp.z:.3f})"
             )
         if self.last_attitude_thrust is not None:
@@ -757,7 +775,7 @@ class WallContactTester(Node):
         msg = WrenchStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.sensor_frame
-        msg.wrench.force.x = float(self.desired_force)
+        msg.wrench.force.x = float(self.active_force_setpoint_x)
         self.ft_setpoint_pub.publish(msg)
 
     def _set_wrench_switch(self, enabled: bool) -> None:
