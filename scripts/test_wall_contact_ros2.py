@@ -51,6 +51,7 @@ class TestState(Enum):
     HOVER_ALT = auto()
     APPROACH = auto()
     HOLD_FORCE = auto()
+    DETACH = auto()
     RETREAT = auto()
     LAND = auto()
     IDLE = auto()
@@ -64,7 +65,7 @@ class WallContactTester(Node):
         # --------------- parameters --------------- #
         self.declare_parameter("force_topic", "ft_data_filtered")
         self.declare_parameter("force_threshold", 1.8)
-        self.declare_parameter("contact_force_max", 6.0)
+        self.declare_parameter("contact_force_max", 8.0)
         self.declare_parameter("contact_confirm_sec", 0.15)
         self.declare_parameter("contact_alt_tolerance", 0.15)
         self.declare_parameter("desired_force", 5.0)
@@ -79,10 +80,14 @@ class WallContactTester(Node):
         self.declare_parameter("hold_force_nudge_deadband", 0.2)
         self.declare_parameter("hold_force_nudge_max_x_offset", 0.05)
         self.declare_parameter("hold_lateral_abort_y", 0.35)
-        self.declare_parameter("hold_vertical_abort_z", 0.25)
+        self.declare_parameter("hold_vertical_abort_z", 0.35)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.5)
         self.declare_parameter("takeoff_velocity", 0.3)
+        self.declare_parameter("takeoff_alt_tolerance", 0.05)
+        self.declare_parameter("takeoff_settle_vel", 0.08)
+        self.declare_parameter("takeoff_settle_sec", 0.5)
+        self.declare_parameter("hover_alt_tolerance", 0.08)
         self.declare_parameter("pre_approach_hold_sec", 2.0)
         self.declare_parameter("loop_rate", 100.0)
         self.declare_parameter("map_frame_id", "map")
@@ -91,6 +96,8 @@ class WallContactTester(Node):
         self.declare_parameter("frd_frame_id", "base_link_frd")
         self.declare_parameter("sensor_offset_z", -0.3)
         self.declare_parameter("hold_x_offset", 0.0)
+        self.declare_parameter("detach_velocity", 0.05)
+        self.declare_parameter("detach_distance", 0.20)
         self.declare_parameter("retreat_velocity", 0.08)
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
@@ -117,8 +124,12 @@ class WallContactTester(Node):
         self.hold_lateral_abort_y = float(self.get_parameter("hold_lateral_abort_y").value)
         self.hold_vertical_abort_z = float(self.get_parameter("hold_vertical_abort_z").value)
         self.sensor_frame = self.get_parameter("sensor_frame").value
-        self.takeoff_alt = self.get_parameter("takeoff_altitude").value
-        self.takeoff_vel = self.get_parameter("takeoff_velocity").value
+        self.takeoff_alt = float(self.get_parameter("takeoff_altitude").value)
+        self.takeoff_vel = float(self.get_parameter("takeoff_velocity").value)
+        self.takeoff_alt_tolerance = float(self.get_parameter("takeoff_alt_tolerance").value)
+        self.takeoff_settle_vel = float(self.get_parameter("takeoff_settle_vel").value)
+        self.takeoff_settle_sec = float(self.get_parameter("takeoff_settle_sec").value)
+        self.hover_alt_tolerance = float(self.get_parameter("hover_alt_tolerance").value)
         self.pre_approach_hold_sec = float(self.get_parameter("pre_approach_hold_sec").value)
         loop_rate = self.get_parameter("loop_rate").value
         self.map_frame_id = self.get_parameter("map_frame_id").value
@@ -127,6 +138,8 @@ class WallContactTester(Node):
         self.frd_frame_id = self.get_parameter("frd_frame_id").value
         self.sensor_offset_z = float(self.get_parameter("sensor_offset_z").value)
         self.hold_x_offset = float(self.get_parameter("hold_x_offset").value)
+        self.detach_velocity = float(self.get_parameter("detach_velocity").value)
+        self.detach_distance = float(self.get_parameter("detach_distance").value)
         self.retreat_velocity = float(self.get_parameter("retreat_velocity").value)
         self.retreat_duration_sec = float(self.get_parameter("retreat_duration_sec").value)
         self.land_velocity = float(self.get_parameter("land_velocity").value)
@@ -184,10 +197,13 @@ class WallContactTester(Node):
         self.hold_odom: Optional[Odometry] = None
         self.hold_x_reference: Optional[float] = None
         self._hover_t0: Optional[Time] = None
+        self._takeoff_stable_since: Optional[Time] = None
         self._arm_requested = False
         self._offboard_requested = False
         self._preflight_log_timer = 0
         self._retreat_t0: Optional[Time] = None
+        self._detach_start_x: Optional[float] = None
+        self._detach_target_z: Optional[float] = None
         self._land_t0: Optional[Time] = None
         self._disarm_sent = False
         self._idle_logged = False
@@ -254,6 +270,7 @@ class WallContactTester(Node):
             TestState.HOVER_ALT: self._step_hover_alt,
             TestState.APPROACH: self._step_approach,
             TestState.HOLD_FORCE: self._step_hold_force,
+            TestState.DETACH: self._step_detach,
             TestState.RETREAT: self._step_retreat,
             TestState.LAND: self._step_land,
             TestState.IDLE: self._step_idle,
@@ -348,20 +365,48 @@ class WallContactTester(Node):
 
         self._command_vel_x = 0.0
         self._command_vel_y = 0.0
-        self._command_vel_z = self.takeoff_vel
-        self._command_target_z = self.takeoff_alt
+        if not self._target_initialized:
+            self._set_tracking_target_from_current_odom()
+        if self._command_target_z < self.takeoff_alt:
+            next_target_z = min(self._command_target_z + self.takeoff_vel * self._loop_period,
+                                self.takeoff_alt)
+            self._command_target_z = next_target_z
+            self._command_vel_z = self.takeoff_vel if next_target_z < self.takeoff_alt else 0.0
+        else:
+            self._command_target_z = self.takeoff_alt
+            self._command_vel_z = 0.0
         self._publish_tracking_point_target()
 
-        if self.current_alt >= self.takeoff_alt * 0.95:
-            self.get_logger().info(
-                f"Reached altitude {self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m). "
-                f"Hovering {self.pre_approach_hold_sec:.1f}s to stabilize before approach.")
-            self.state = TestState.HOVER_ALT
-            self._hover_t0 = self.get_clock().now()
+        current_vz = self._current_vertical_velocity()
+        alt_err = abs(self.current_alt - self.takeoff_alt)
+        alt_ready = (
+            self._command_target_z >= self.takeoff_alt and
+            alt_err <= self.takeoff_alt_tolerance and
+            abs(current_vz) <= self.takeoff_settle_vel
+        )
+
+        now = self.get_clock().now()
+        if alt_ready:
+            if self._takeoff_stable_since is None:
+                self._takeoff_stable_since = now
+            stable_time = (now - self._takeoff_stable_since).nanoseconds * 1e-9
+            if stable_time >= self.takeoff_settle_sec:
+                self.get_logger().info(
+                    f"Reached altitude {self.current_alt:.2f}m with vz={current_vz:.2f}m/s "
+                    f"(target {self.takeoff_alt:.1f}m). Hovering "
+                    f"{self.pre_approach_hold_sec:.1f}s to stabilize before approach.")
+                self.state = TestState.HOVER_ALT
+                self._hover_t0 = None
+                return
         else:
-            self.get_logger().info(
-                f"Taking off... alt={self.current_alt:.2f}/{self.takeoff_alt:.1f}m",
-                throttle_duration_sec=1.0)
+            self._takeoff_stable_since = None
+            stable_time = 0.0
+
+        self.get_logger().info(
+            f"Taking off... alt={self.current_alt:.2f}/{self.takeoff_alt:.1f}m  "
+            f"target_z={self._command_target_z:.2f}m  vz={current_vz:.2f}m/s  "
+            f"settled={stable_time:.1f}/{self.takeoff_settle_sec:.1f}s",
+            throttle_duration_sec=1.0)
 
     # ------------------------------------------------------------------ #
     # HOVER_ALT
@@ -374,19 +419,31 @@ class WallContactTester(Node):
             self.state = TestState.PREFLIGHT
             return
 
-        if self._hover_t0 is None:
-            self._hover_t0 = self.get_clock().now()
-
         self._command_vel_x = 0.0
         self._command_vel_y = 0.0
         self._command_vel_z = 0.0
         self._command_target_z = self.takeoff_alt
         self._publish_tracking_point_target()
 
-        elapsed = (self.get_clock().now() - self._hover_t0).nanoseconds * 1e-9
+        current_vz = self._current_vertical_velocity()
+        alt_err = abs(self.current_alt - self.takeoff_alt)
+        hover_ready = (
+            alt_err <= self.hover_alt_tolerance and
+            abs(current_vz) <= self.takeoff_settle_vel
+        )
+        now = self.get_clock().now()
+        if hover_ready:
+            if self._hover_t0 is None:
+                self._hover_t0 = now
+            elapsed = (now - self._hover_t0).nanoseconds * 1e-9
+        else:
+            self._hover_t0 = None
+            elapsed = 0.0
+
         self.get_logger().info(
             f"Pre-approach hover {elapsed:.1f}/{self.pre_approach_hold_sec:.1f}s  "
-            f"alt={self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m)",
+            f"alt={self.current_alt:.2f}m (target {self.takeoff_alt:.1f}m)  "
+            f"vz={current_vz:.2f}m/s",
             throttle_duration_sec=1.0)
 
         if elapsed >= self.pre_approach_hold_sec:
@@ -562,11 +619,49 @@ class WallContactTester(Node):
 
     def _finish_hold(self) -> None:
         self._set_wrench_switch(False)
-        self._retreat_t0 = self.get_clock().now()
         self._command_vel_x = 0.0
         self._command_vel_y = 0.0
         self._command_vel_z = 0.0
-        self.state = TestState.RETREAT
+        self._retreat_t0 = None
+        if self.last_odom is not None:
+            p = self.last_odom.pose.pose.position
+            self._set_tracking_target(float(p.x), float(p.y), float(p.z))
+            self._detach_start_x = float(p.x)
+            self._detach_target_z = float(p.z)
+        else:
+            self._detach_start_x = self._command_target_x
+            self._detach_target_z = self._command_target_z
+        self.get_logger().info(
+            f"Detached from force control. Switching to pose-only retreat; "
+            f"backing off {self.detach_distance:.2f}m at {self.detach_velocity:.2f} m/s.")
+        self.state = TestState.DETACH
+
+    # ------------------------------------------------------------------ #
+    # DETACH
+    # ------------------------------------------------------------------ #
+
+    def _step_detach(self) -> None:
+        self._set_wrench_switch(False)
+        if self._detach_start_x is None:
+            self._detach_start_x = self._command_target_x
+        if self._detach_target_z is None:
+            self._detach_target_z = self._command_target_z
+
+        self._advance_tracking_target(-self.detach_velocity, 0.0, 0.0)
+        self._command_target_z = self._detach_target_z
+        self._command_vel_z = 0.0
+        self._publish_tracking_point_target()
+
+        backed_off = max(0.0, self._detach_start_x - self._command_target_x)
+        self.get_logger().info(
+            f"Detach {backed_off:.2f}/{self.detach_distance:.2f}m  "
+            f"alt={self.current_alt:.2f}m",
+            throttle_duration_sec=1.0)
+
+        if backed_off >= self.detach_distance:
+            self.get_logger().info("Detach complete. Continuing pose-only retreat.")
+            self._retreat_t0 = self.get_clock().now()
+            self.state = TestState.RETREAT
 
     # ------------------------------------------------------------------ #
     # RETREAT
@@ -782,6 +877,11 @@ class WallContactTester(Node):
         msg = Bool()
         msg.data = bool(enabled)
         self.switch_pub.publish(msg)
+
+    def _current_vertical_velocity(self) -> float:
+        if self.last_odom is None:
+            return 0.0
+        return float(self.last_odom.twist.twist.linear.z)
 
 
 def main(args=None) -> None:
