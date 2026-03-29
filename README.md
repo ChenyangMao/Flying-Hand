@@ -71,17 +71,6 @@ ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 python3 scripts/gz_ft_bridge.py
 ```
 
-### One-command startup
-
-```
-./scripts/run_wrench_stack.sh
-```
-
-Optional environment overrides:
-
-```
-PX4_TARGET=gz_hexa_scorpion FCU_URL=udp://:14540@127.0.0.1:14580 ./scripts/run_wrench_stack.sh
-```
 
 ### Run test script
 
@@ -89,16 +78,7 @@ PX4_TARGET=gz_hexa_scorpion FCU_URL=udp://:14540@127.0.0.1:14580 ./scripts/run_w
 python3 scripts/test_wall_contact_ros2.py
 ```
 
-
-
-make px4_sitl gz_hexa_scorpion
-
-ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
-
-ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
-
-python3 scripts/gz_ft_bridge.py
-
+### Plot the control info
+```
 python3 scripts/plot_thrust_live_ros2.py
-
-python3 scripts/test_wall_contact_ros2.py
+```
