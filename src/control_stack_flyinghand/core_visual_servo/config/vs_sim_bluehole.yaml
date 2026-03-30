@@ -1,0 +1,20 @@
+# Visual servo — simulation (blue target). ROS 2 parameter file.
+circle_detector:
+  ros__parameters:
+    image_topic: /uav1/camera/color/image_raw
+    circle_topic: /detected_circle
+    show_window: true
+    desired_color: blue
+
+visual_servo_controller:
+  ros__parameters:
+    camera.fx: 744.96462268
+    camera.fy: 753.64243411
+    camera.cx: 512.0
+    camera.cy: 384.0
+    target_center_y: 195.0
+    target_center_y_final: 195.0
+    target_radius_pixel: 110.0
+    target_radius_pixel_final: 110.0
+    target_radius: 0.07
+    target_x_bias: 0.0
