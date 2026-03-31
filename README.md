@@ -1,3 +1,7 @@
+## Clone without Firmware
+```
+git clone --recurse-submodules=no git@github.com:ChenyangMao/Flying-Hand.git
+```
 ## Firmware(PX4) build
 
 ```
