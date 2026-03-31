@@ -68,9 +68,8 @@ class SimFtSensor(Node):
         self.create_timer(period, self._publish_sample)
 
         self.get_logger().info(
-            "Publishing simulated FT data to '%s' at %.1f Hz "
-            "(frame_id='%s', mean_x=%.2f N)",
-            args.topic, args.rate, args.frame_id, args.mean_x,
+            f"Publishing simulated FT data to '{args.topic}' at {args.rate:.1f} Hz "
+            f"(frame_id='{args.frame_id}', mean_x={args.mean_x:.2f} N)",
         )
 
     def _noise(self, std: float) -> float:
