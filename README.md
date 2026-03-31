@@ -75,11 +75,7 @@ ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 python3 scripts/gz_ft_bridge.py
 ```
 
-### Or start a simulated FT sensor
 
-```
-python3 scripts/sim_ft_sensor.py
-```
 
 
 ### Run test script
@@ -91,4 +87,26 @@ python3 scripts/test_wall_contact_ros2.py
 ### Plot the control info
 ```
 python3 scripts/plot_thrust_live_ros2.py
+```
+
+## Deploy controller on Jetson Nano
+### Start a simulated FT sensor
+
+```
+python3 scripts/sim_ft_sensor.py
+```
+### On Jetson
+```
+source /opt/ros/humble/setup.bash
+source /home/teamc/Flying-Hand/install/setup.bash
+export ROS_DOMAIN_ID=10
+export ROS_LOCALHOST_ONLY=0
+python3 scripts/sim_ft_sensor.py
+```
+### On PC
+```
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=10
+export ROS_LOCALHOST_ONLY=0
+ros2 topic echo /ft_data
 ```
