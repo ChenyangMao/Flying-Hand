@@ -36,6 +36,16 @@ def generate_launch_description():
             name='sensor_to_sim',
             arguments=['0', '0', '0', '0', '0', '0', 'ft_sensor', 'sim_ft_sensor'],
         ),
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='base_to_camera',
+            arguments=[
+                '0.12', '0', '0.12',
+                '-1.57079632679', '0', '-1.57079632679',
+                'base_link', 'camera',
+            ],
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(px4_bridge_launch),
             condition=IfCondition(LaunchConfiguration('include_px4_bridge')),

@@ -15,6 +15,18 @@ wrench_controller:
     # Same parameter as ROS1 control_stack_base (damps vz in force calculation).
     velx_damping_coefficient: 0.15
 
+    visual_servo:
+      kp: [0.18, 0.14, 0.14]
+      ki: [0.0, 0.0, 0.0]
+      max_body_velocity: [0.08, 0.04, 0.05]
+      max_thrust_delta: [0.04, 0.03, 0.035]
+      thrust_z_damping_coeff: 0.01
+      cmd_alpha: 0.15
+      enable_ramp_sec: 1.8
+      depth_min: 0.55
+      depth_max: 0.72
+      timeout_sec: 0.6
+
     # Keep only a mild wall-normal feedforward so 5 N contact can be
     # established quickly without continuously biasing the vehicle deeper
     # into the wall during long holds.

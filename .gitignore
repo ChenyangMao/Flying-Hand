@@ -4,3 +4,7 @@ log/
 .colcon/
 control_stack_base/
 symlink_install_manifest.txt
+
+__pycache__/
+*.py[cod]
+*$py.class

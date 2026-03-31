@@ -3,6 +3,7 @@
 import time
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 import numpy as np
 from geometry_msgs.msg import TwistStamped, Vector3, Vector3Stamped
 from nav_msgs.msg import Odometry
@@ -18,6 +19,8 @@ class VisualServo(Node):
         self._last_circle_log_t = 0.0
         self._last_verbose_cmd_log_t = 0.0
         self._stationary_warned = False
+        self._target_active = None
+        self._last_circle_t = None
 
         self.declare_parameter("camera.fx", 349.21872)
         self.declare_parameter("camera.fy", 349.21872)
@@ -29,11 +32,37 @@ class VisualServo(Node):
         self.declare_parameter("target_radius_pixel", 100.0)
         self.declare_parameter("target_radius_pixel_final", 115.0)
         self.declare_parameter("target_radius", 0.15)
+        self.declare_parameter("odometry_topic", "/uav1/odometry")
+        self.declare_parameter("lost_target_timeout_sec", 0.5)
+        self.declare_parameter("lambda_gain", 2.0)
+        self.declare_parameter("forward_gain", 0.0005)
+        self.declare_parameter("max_cmd_camera_xy", 0.03)
+        self.declare_parameter("max_cmd_camera_z", 0.06)
+        self.declare_parameter("stationary_retarget_enable", False)
+        self.declare_parameter("stationary_speed_threshold", 0.01)
+        self.declare_parameter("stationary_count_threshold", 1000)
 
         self.fx = float(self.get_parameter("camera.fx").value)
         self.fy = float(self.get_parameter("camera.fy").value)
         self.cx = float(self.get_parameter("camera.cx").value)
         self.cy = float(self.get_parameter("camera.cy").value)
+        self.odometry_topic = str(self.get_parameter("odometry_topic").value)
+        self.lost_target_timeout_sec = float(
+            self.get_parameter("lost_target_timeout_sec").value
+        )
+        self.lambda_gain = float(self.get_parameter("lambda_gain").value)
+        self.forward_gain = float(self.get_parameter("forward_gain").value)
+        self.max_cmd_camera_xy = float(self.get_parameter("max_cmd_camera_xy").value)
+        self.max_cmd_camera_z = float(self.get_parameter("max_cmd_camera_z").value)
+        self.stationary_retarget_enable = bool(
+            self.get_parameter("stationary_retarget_enable").value
+        )
+        self.stationary_speed_threshold = float(
+            self.get_parameter("stationary_speed_threshold").value
+        )
+        self.stationary_count_threshold = int(
+            self.get_parameter("stationary_count_threshold").value
+        )
         self.K = np.array(
             [[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]]
         )
@@ -53,15 +82,26 @@ class VisualServo(Node):
         )
         self.rd = self.target_radius_pixel
         self.target_radius = float(self.get_parameter("target_radius").value)
-
-        self.lambda_gain = 3.0
-        self.forward_gain = 0.003
+        self.get_logger().info(
+            f"IBVS gains: lambda={self.lambda_gain:.3f} "
+            f"forward_gain={self.forward_gain:.5f} "
+            f"max_cmd_xy={self.max_cmd_camera_xy:.3f} "
+            f"max_cmd_z={self.max_cmd_camera_z:.3f}"
+        )
+        self.get_logger().info(
+            f"stationary_retarget_enable={self.stationary_retarget_enable} "
+            f"threshold={self.stationary_speed_threshold:.3f} "
+            f"count={self.stationary_count_threshold}"
+        )
 
         self.circle_sub = self.create_subscription(
             Vector3, "/detected_circle", self.circle_cb, 10
         )
         self.vehicle_velocity_sub = self.create_subscription(
-            Odometry, "/uav1/odometry", self.vehicle_velocity_cb, 10
+            Odometry,
+            self.odometry_topic,
+            self.vehicle_velocity_cb,
+            qos_profile_sensor_data,
         )
 
         self.cmd_pub = self.create_publisher(TwistStamped, "/visual_servo/cmd_vel", 1)
@@ -71,6 +111,8 @@ class VisualServo(Node):
         self.visual_servo_active = self.create_publisher(
             Bool, "/visual_servo/active", 1
         )
+        self.watchdog_timer = self.create_timer(0.1, self.watchdog_cb)
+        self._publish_active(False)
 
     def _throttle_info(self, last_attr: str, period_s: float, text: str) -> None:
         now = time.monotonic()
@@ -93,10 +135,14 @@ class VisualServo(Node):
         if r <= 0.0:
             return
 
+        self._last_circle_t = self.get_clock().now()
+        self._publish_active(True, force=True)
+
         depth = (self.fx * self.target_radius) / r
 
         depth_msg = Vector3Stamped()
         depth_msg.header.stamp = self.get_clock().now().to_msg()
+        depth_msg.header.frame_id = "camera"
         depth_msg.vector.x = 0.0
         depth_msg.vector.y = 0.0
         depth_msg.vector.z = float(depth)
@@ -127,16 +173,22 @@ class VisualServo(Node):
             [(u - self.target_center[0]), (v - self.target_center[1])]
         )
         v_camera = -self.lambda_gain * (np.linalg.pinv(L) @ error)
+        v_camera[0] = np.clip(v_camera[0], -self.max_cmd_camera_xy, self.max_cmd_camera_xy)
+        v_camera[1] = np.clip(v_camera[1], -self.max_cmd_camera_xy, self.max_cmd_camera_xy)
         error_r = r - self.rd
-        v_camera_z = -self.forward_gain * error_r
+        v_camera_z = np.clip(
+            -self.forward_gain * error_r,
+            -self.max_cmd_camera_z,
+            self.max_cmd_camera_z,
+        )
 
         twist = TwistStamped()
         twist.header.stamp = self.get_clock().now().to_msg()
+        twist.header.frame_id = "camera"
         twist.twist.linear.x = float(v_camera[0])
         twist.twist.linear.y = float(v_camera[1])
         twist.twist.linear.z = float(v_camera_z)
         self.cmd_pub.publish(twist)
-        self.visual_servo_active.publish(Bool(data=True))
 
         if self.verbose:
             self._throttle_info(
@@ -149,9 +201,12 @@ class VisualServo(Node):
     def vehicle_velocity_cb(self, msg: Odometry):
         lin = msg.twist.twist.linear
         self._vel = (float(lin.x), float(lin.y), float(lin.z))
-        if np.linalg.norm(self._vel) < 0.01:
+        if not self.stationary_retarget_enable:
+            return
+
+        if np.linalg.norm(self._vel) < self.stationary_speed_threshold:
             self.count += 1
-            if self.count > 1000 and not self._stationary_warned:
+            if self.count > self.stationary_count_threshold and not self._stationary_warned:
                 self._stationary_warned = True
                 self.get_logger().warning(
                     "Vehicle is stationary, changing target center."
@@ -162,6 +217,22 @@ class VisualServo(Node):
                 )
                 self.rd = self.target_radius_pixel_final
                 self.lambda_gain = 6.0
+        else:
+            self.count = 0
+
+    def watchdog_cb(self):
+        if self._last_circle_t is None:
+            return
+
+        age = (self.get_clock().now() - self._last_circle_t).nanoseconds * 1e-9
+        if age > self.lost_target_timeout_sec:
+            self._publish_active(False)
+
+    def _publish_active(self, is_active: bool, force: bool = False):
+        if not force and self._target_active == is_active:
+            return
+        self._target_active = is_active
+        self.visual_servo_active.publish(Bool(data=is_active))
 
 
 def main(args=None):
@@ -173,7 +244,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

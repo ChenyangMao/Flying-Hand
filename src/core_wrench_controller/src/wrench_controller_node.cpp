@@ -1,6 +1,8 @@
 #include "wrench_controller/wrench_controller_node.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -11,6 +13,11 @@
 
 namespace wrench_controller
 {
+
+namespace
+{
+constexpr double kPi = 3.14159265358979323846;
+}  // namespace
 
 WrenchControlNode::WrenchControlNode(const std::string & node_name)
 : base::BaseNode(node_name)
@@ -54,20 +61,15 @@ bool WrenchControlNode::initialize()
   (void)sensor_fusion;
 
   // Frames and other controller parameters
-  std::string target_frame =
-    this->declare_parameter<std::string>("target_frame", "map");
-  std::string sensor_frame =
-    this->declare_parameter<std::string>("ft_sensor_frame", "ft_sensor");
-  std::string robot_frame =
-    this->declare_parameter<std::string>("robot_frame", "base_link");
-  std::string world_frame =
-    this->declare_parameter<std::string>("world_frame", "map");
+  target_frame_ = this->declare_parameter<std::string>("target_frame", "map");
+  sensor_frame_ = this->declare_parameter<std::string>("ft_sensor_frame", "ft_sensor");
+  robot_frame_ = this->declare_parameter<std::string>("robot_frame", "base_link");
+  world_frame_ = this->declare_parameter<std::string>("world_frame", "map");
   contact_frame_ = this->declare_parameter<std::string>("contact_frame", "contact");
   mix_vel_x_ = this->declare_parameter<double>("mix_vel_x", 0.7);
   mix_vel_y_ = this->declare_parameter<double>("mix_vel_y", 1.0);
   mix_vel_z_ = this->declare_parameter<double>("mix_vel_z", 1.0);
-  std::string camera_frame =
-    this->declare_parameter<std::string>("camera_frame", "camera");
+  camera_frame_ = this->declare_parameter<std::string>("camera_frame", "camera");
 
   double xy_vel_limit = this->declare_parameter<double>("max_xy_vel", 12.0);
   double hover_thrust = this->declare_parameter<double>("hover_thrust", 0.5);
@@ -83,11 +85,11 @@ bool WrenchControlNode::initialize()
     this->declare_parameter<bool>("ft_data.publish", true);
   publish_filtered_ft_data_ = publish_filtered_ft_data;
 
-  double force_ff_coefficient =
+  force_ff_coefficient_ =
     this->declare_parameter<double>("force_ff_coefficient", 0.01);
-  double force_ff_coefficient_bias =
+  force_ff_coefficient_bias_ =
     this->declare_parameter<double>("force_ff_coeffcient_bias", 0.05);
-  double velx_damping_coefficient =
+  velx_damping_coefficient_ =
     this->declare_parameter<double>("velx_damping_coefficient", 0.0);
 
   RCLCPP_INFO(
@@ -114,11 +116,11 @@ bool WrenchControlNode::initialize()
   RCLCPP_INFO(
     this->get_logger(),
     "Frames: world=%s, robot=%s, sensor=%s, target=%s, camera=%s, contact=%s",
-    world_frame.c_str(),
-    robot_frame.c_str(),
-    sensor_frame.c_str(),
-    target_frame.c_str(),
-    camera_frame.c_str(),
+    world_frame_.c_str(),
+    robot_frame_.c_str(),
+    sensor_frame_.c_str(),
+    target_frame_.c_str(),
+    camera_frame_.c_str(),
     contact_frame_.c_str());
 
   RCLCPP_INFO(
@@ -129,7 +131,7 @@ bool WrenchControlNode::initialize()
   RCLCPP_INFO(
     this->get_logger(),
     "Force FF: coeff=%.4f, bias=%.4f, velx_damping=%.4f",
-    force_ff_coefficient, force_ff_coefficient_bias, velx_damping_coefficient);
+    force_ff_coefficient_, force_ff_coefficient_bias_, velx_damping_coefficient_);
 
   // Force-loop PID gains (from wrench_px4_params.yaml style parameters)
   const double fx_p = this->declare_parameter<double>("fx.P", 0.0);
@@ -172,7 +174,7 @@ bool WrenchControlNode::initialize()
 
   pose_controller_ = std::make_unique<pose_controller::PoseController>(
     pos_fence,
-    target_frame,
+    target_frame_,
     xy_vel_limit,
     thrust_min,
     thrust_max,
@@ -193,6 +195,10 @@ bool WrenchControlNode::initialize()
   // Tuned values: config/wrench_px4_params.yaml (and gazebo overlay) under pose_controller/.
   // Defaults below are only fallbacks if a key is missing from YAML (ROS2 declare_parameter).
   const std::array<double, 3> z3 = {0.0, 0.0, 0.0};
+  const std::array<double, 3> vs_kp_defaults = {0.25, 0.18, 0.20};
+  const std::array<double, 3> vs_ki_defaults = {0.0, 0.0, 0.0};
+  const std::array<double, 3> vs_vel_defaults = {0.12, 0.06, 0.08};
+  const std::array<double, 3> vs_thrust_defaults = {0.06, 0.04, 0.05};
   const double lim_lo = std::numeric_limits<double>::lowest();
   const double lim_hi = std::numeric_limits<double>::max();
   const std::array<double, 3> min_fallback = {lim_lo, lim_lo, lim_lo};
@@ -206,6 +212,20 @@ bool WrenchControlNode::initialize()
     get_vec3("pose_controller.integral_threshold", z3);
   Eigen::Vector3d pose_minimum = get_vec3("pose_controller.min", min_fallback);
   Eigen::Vector3d pose_maximum = get_vec3("pose_controller.max", max_fallback);
+  vs_kp_ = get_vec3("visual_servo.kp", vs_kp_defaults);
+  vs_ki_ = get_vec3("visual_servo.ki", vs_ki_defaults);
+  vs_max_body_velocity_ =
+    get_vec3("visual_servo.max_body_velocity", vs_vel_defaults);
+  vs_max_thrust_delta_ =
+    get_vec3("visual_servo.max_thrust_delta", vs_thrust_defaults);
+  thrust_z_damping_coeff_ =
+    this->declare_parameter<double>("visual_servo.thrust_z_damping_coeff", 0.01);
+  vs_depth_min_ = this->declare_parameter<double>("visual_servo.depth_min", 0.55);
+  vs_depth_max_ = this->declare_parameter<double>("visual_servo.depth_max", 0.75);
+  vs_timeout_sec_ = this->declare_parameter<double>("visual_servo.timeout_sec", 0.5);
+  vs_cmd_alpha_ = this->declare_parameter<double>("visual_servo.cmd_alpha", 0.25);
+  vs_enable_ramp_sec_ =
+    this->declare_parameter<double>("visual_servo.enable_ramp_sec", 1.0);
 
   pose_controller_->configure_gains(
     pose_P, pose_I, pose_D, pose_FF, pose_integral_threshold, pose_minimum, pose_maximum);
@@ -215,6 +235,17 @@ bool WrenchControlNode::initialize()
     "PoseController gains: P=(%.3f,%.3f,%.3f) D=(%.3f,%.3f,%.3f)",
     pose_P.x(), pose_P.y(), pose_P.z(),
     pose_D.x(), pose_D.y(), pose_D.z());
+  RCLCPP_INFO(
+    this->get_logger(),
+    "Visual servo gains: kp=(%.3f,%.3f,%.3f) ki=(%.3f,%.3f,%.3f), "
+    "vmax=(%.3f,%.3f,%.3f) thrust_max=(%.3f,%.3f,%.3f), "
+    "alpha=%.2f ramp=%.2fs depth blend=[%.3f, %.3f], timeout=%.2fs",
+    vs_kp_.x(), vs_kp_.y(), vs_kp_.z(),
+    vs_ki_.x(), vs_ki_.y(), vs_ki_.z(),
+    vs_max_body_velocity_.x(), vs_max_body_velocity_.y(), vs_max_body_velocity_.z(),
+    vs_max_thrust_delta_.x(), vs_max_thrust_delta_.y(), vs_max_thrust_delta_.z(),
+    vs_cmd_alpha_, vs_enable_ramp_sec_,
+    vs_depth_min_, vs_depth_max_, vs_timeout_sec_);
 
   // Create publishers and subscribers that are already known / straightforward to migrate.
   // Command publisher (mav_msgs::msg::AttitudeThrust)
@@ -224,15 +255,17 @@ bool WrenchControlNode::initialize()
   // Filtered FT data publisher (sensor frame)
   filtered_ft_data_pub_ =
     this->create_publisher<geometry_msgs::msg::WrenchStamped>("ft_data_filtered", 10);
+  thrust_debug_pub_ =
+    this->create_publisher<geometry_msgs::msg::Vector3Stamped>("thrust_debug", 10);
 
   // Core wrench controller instance
   wrench_controller_ = std::make_unique<wrench_controller::WrenchController>(
-    sensor_frame,
-    robot_frame,
-    world_frame,
-    camera_frame,
-    target_frame,     // thrust output frame
-    robot_frame,      // torque output frame
+    sensor_frame_,
+    robot_frame_,
+    world_frame_,
+    camera_frame_,
+    target_frame_,     // thrust output frame
+    robot_frame_,      // torque output frame
     hover_thrust,
     filter_ft_data,
     median_filter_max_buffer_size,
@@ -279,6 +312,26 @@ bool WrenchControlNode::initialize()
     10,
     std::bind(&WrenchControlNode::switch_callback, this, std::placeholders::_1));
 
+  vs_enable_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    "/visual_servo/enable",
+    10,
+    std::bind(&WrenchControlNode::vs_enable_callback, this, std::placeholders::_1));
+
+  vs_active_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    "/visual_servo/active",
+    10,
+    std::bind(&WrenchControlNode::vs_active_callback, this, std::placeholders::_1));
+
+  vs_velocity_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+    "/visual_servo/cmd_vel",
+    10,
+    std::bind(&WrenchControlNode::vs_velocity_callback, this, std::placeholders::_1));
+
+  vs_depth_sub_ = this->create_subscription<geometry_msgs::msg::Vector3Stamped>(
+    "/visual_servo/depth",
+    10,
+    std::bind(&WrenchControlNode::vs_depth_callback, this, std::placeholders::_1));
+
   // TODO: In later steps, migrate PoseController/WrenchController to ROS2 and construct them here.
   // TODO: Create ROS2 subscriptions, publishers, and services here, keeping topic/service names compatible with ROS1.
 
@@ -305,33 +358,163 @@ bool WrenchControlNode::execute()
     "POS CTRL  pose_thrust_xyz=(%.4f, %.4f, %.4f)",
     thrust_pose_des.x(), thrust_pose_des.y(), thrust_pose_des.z());
 
-  // Before contact: pose controller handles xyz
-  tf2::Vector3 thrust_des = thrust_pose_des;
+  const double now_sec = this->now().seconds();
+  const bool vs_active_recent =
+    visual_servo_active_ && (now_sec - last_vs_active_stamp_sec_) <= vs_timeout_sec_;
+  const bool vs_cmd_recent =
+    last_vs_cmd_stamp_sec_ > 0.0 && (now_sec - last_vs_cmd_stamp_sec_) <= vs_timeout_sec_;
+  const bool vs_depth_recent =
+    last_vs_depth_stamp_sec_ > 0.0 && (now_sec - last_vs_depth_stamp_sec_) <= vs_timeout_sec_;
 
-  // After contact: wrench handles x (force PI + position PD damping), pose handles yz
+  tf2::Vector3 thrust_vs_des = thrust_pose_des;
+  tf2::Vector3 desired_body_velocity;
+  bool vs_valid = false;
+
+  if (visual_servo_enabled_ && vs_active_recent && vs_cmd_recent &&
+    get_visual_servo_body_velocity(desired_body_velocity))
+  {
+    desired_body_velocity.setX(
+      std::clamp(
+        desired_body_velocity.x(),
+        -vs_max_body_velocity_.x(),
+        vs_max_body_velocity_.x()));
+    desired_body_velocity.setY(
+      std::clamp(
+        desired_body_velocity.y(),
+        -vs_max_body_velocity_.y(),
+        vs_max_body_velocity_.y()));
+    desired_body_velocity.setZ(
+      std::clamp(
+        desired_body_velocity.z(),
+        -vs_max_body_velocity_.z(),
+        vs_max_body_velocity_.z()));
+
+    const double alpha = std::clamp(vs_cmd_alpha_, 0.0, 1.0);
+    filtered_vs_body_velocity_ =
+      filtered_vs_body_velocity_ * (1.0 - alpha) + desired_body_velocity * alpha;
+
+    const Eigen::Vector3d desired_vel(
+      filtered_vs_body_velocity_.x(),
+      filtered_vs_body_velocity_.y(),
+      filtered_vs_body_velocity_.z());
+    const Eigen::Vector3d current_vel(
+      current_body_velocity_.x(),
+      current_body_velocity_.y(),
+      current_body_velocity_.z());
+    const Eigen::Vector3d vel_error = desired_vel - current_vel;
+    const double execute_target_hz =
+      std::max(this->get_parameter("execute_target").as_double(), 1.0);
+    const double dt = std::max(1.0 / execute_target_hz, 1e-3);
+
+    vs_integral_error_ += vel_error * dt;
+    constexpr double max_integral_norm = 2.0;
+    if (vs_integral_error_.norm() > max_integral_norm) {
+      vs_integral_error_ = vs_integral_error_.normalized() * max_integral_norm;
+    }
+
+    const double thrust_z_damping = -thrust_z_damping_coeff_ * current_vel.z();
+    Eigen::Vector3d thrust_vs_delta_body =
+      vs_kp_.cwiseProduct(vel_error) +
+      vs_ki_.cwiseProduct(vs_integral_error_) +
+      Eigen::Vector3d(0.0, 0.0, thrust_z_damping);
+
+    thrust_vs_delta_body = thrust_vs_delta_body.cwiseMin(vs_max_thrust_delta_);
+    thrust_vs_delta_body = thrust_vs_delta_body.cwiseMax(-vs_max_thrust_delta_);
+
+    const double ramp = compute_vs_enable_ramp(now_sec);
+    thrust_vs_delta_body *= ramp;
+
+    tf2::Vector3 thrust_vs_delta_world;
+    if (!rotate_vector_between_frames(
+        tf2::Vector3(
+          thrust_vs_delta_body.x(),
+          thrust_vs_delta_body.y(),
+          thrust_vs_delta_body.z()),
+        target_frame_,
+        robot_frame_,
+        thrust_vs_delta_world))
+    {
+      reset_visual_servo_pi();
+      return true;
+    }
+
+    thrust_vs_des += thrust_vs_delta_world;
+    vs_valid = true;
+
+    RCLCPP_INFO_THROTTLE(
+      this->get_logger(),
+      *this->get_clock(),
+      1000,
+      "VS CTRL  depth=%.3f  ramp=%.2f  cmd_v_body=(%.3f, %.3f, %.3f)  meas_v_body=(%.3f, %.3f, %.3f)  thrust_delta_body=(%.3f, %.3f, %.3f)  thrust_delta_world=(%.3f, %.3f, %.3f)",
+      latest_vs_depth_,
+      ramp,
+      filtered_vs_body_velocity_.x(),
+      filtered_vs_body_velocity_.y(),
+      filtered_vs_body_velocity_.z(),
+      current_body_velocity_.x(), current_body_velocity_.y(), current_body_velocity_.z(),
+      thrust_vs_delta_body.x(), thrust_vs_delta_body.y(), thrust_vs_delta_body.z(),
+      thrust_vs_delta_world.x(), thrust_vs_delta_world.y(), thrust_vs_delta_world.z());
+  } else {
+    reset_visual_servo_pi();
+  }
+
+  tf2::Vector3 thrust_des = vs_valid ? thrust_vs_des : thrust_pose_des;
+
+  tf2::Vector3 thrust_wrench_des;
+  tf2::Vector3 torque_wrench_des;
+  bool wrench_valid = false;
   if (mode_switch_) {
-    tf2::Vector3 thrust_wrench_des;
-    tf2::Vector3 torque_wrench_des;
+    wrench_valid = wrench_controller_->calculate_thrust_torque(
+      thrust_wrench_des,
+      torque_wrench_des,
+      *tf_buffer_,
+      force_ff_coefficient_,
+      force_ff_coefficient_bias_,
+      wrench_controller_ff_force_,
+      velx_damping_coefficient_);
+  }
 
-    if (wrench_controller_->calculate_thrust_torque(
-        thrust_wrench_des,
-        torque_wrench_des,
-        *tf_buffer_,
-        this->get_parameter("force_ff_coefficient").as_double(),
-        this->get_parameter("force_ff_coeffcient_bias").as_double(),
-        wrench_controller_ff_force_,
-        this->get_parameter("velx_damping_coefficient").as_double())) {
-      // Hybrid: x from wrench (force PI + position PD), yz from pose
+  const double measured_force_mag = std::abs(wrench_controller_->meas_force_x());
+  const double target_force_mag = std::abs(wrench_controller_->target_force_x());
+  const bool contact_force_observed =
+    measured_force_mag >= std::max(0.5, 0.2 * std::max(1.0, target_force_mag));
+
+  if (mode_switch_ && wrench_valid) {
+    if (vs_valid && vs_depth_recent) {
+      const double lambda = compute_vs_force_lambda(latest_vs_depth_);
+      thrust_des.setX(
+        (1.0 - lambda) * thrust_vs_des.x() + lambda * thrust_wrench_des.x());
+      thrust_des.setY(thrust_vs_des.y());
+      thrust_des.setZ(thrust_vs_des.z());
+
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "VS/WRENCH  depth=%.3f  lambda=%.3f  vs_x=%.4f  wrench_x=%.4f  out=(%.4f, %.4f, %.4f)  meas_fx=%.3f  tgt_fx=%.3f",
+        latest_vs_depth_,
+        lambda,
+        thrust_vs_des.x(),
+        thrust_wrench_des.x(),
+        thrust_des.x(),
+        thrust_des.y(),
+        thrust_des.z(),
+        wrench_controller_->meas_force_x(),
+        wrench_controller_->target_force_x());
+    } else if (contact_force_observed) {
+      thrust_des = thrust_pose_des;
       thrust_des.setX(thrust_wrench_des.x());
 
-      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        "HYBRID  wrench_x=%.4f  pose_y=%.4f  pose_z=%.4f  meas_fx=%.3f  tgt_fx=%.3f  err_fx=%.3f",
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "WRENCH FALLBACK  wrench_x=%.4f  pose_y=%.4f  pose_z=%.4f  meas_fx=%.3f  tgt_fx=%.3f",
         thrust_wrench_des.x(),
         thrust_des.y(),
         thrust_des.z(),
         wrench_controller_->meas_force_x(),
-        wrench_controller_->target_force_x(),
-        wrench_controller_->target_force_x() - wrench_controller_->meas_force_x());
+        wrench_controller_->target_force_x());
     }
   }
 
@@ -348,7 +531,7 @@ bool WrenchControlNode::execute()
   // Generate and publish attitude + thrust command
   mav_msgs::msg::AttitudeThrust drone_cmd;
   drone_cmd.header.stamp = this->now();
-  drone_cmd.header.frame_id = this->get_parameter("target_frame").as_string();
+  drone_cmd.header.frame_id = target_frame_;
 
   // Recompute the executable attitude from the final mixed thrust vector.
   // PX4 consumes a scalar thrust plus attitude, so attitude must align with the
@@ -497,6 +680,10 @@ void WrenchControlNode::tracking_point_callback(
 void WrenchControlNode::odometry_callback(
   const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  current_body_velocity_.setValue(
+    msg->twist.twist.linear.x,
+    msg->twist.twist.linear.y,
+    msg->twist.twist.linear.z);
   if (wrench_controller_) {
     wrench_controller_->update_odom_state(*msg, *tf_buffer_);
   }
@@ -520,6 +707,132 @@ void WrenchControlNode::switch_callback(
       wrench_controller_->reset();
     }
   }
+}
+
+void WrenchControlNode::vs_enable_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  const bool prev = visual_servo_enabled_;
+  visual_servo_enabled_ = msg->data;
+  if (visual_servo_enabled_ != prev) {
+    last_vs_enable_change_sec_ = this->now().seconds();
+  }
+  if (!visual_servo_enabled_) {
+    reset_visual_servo_pi();
+  }
+  if (visual_servo_enabled_ != prev) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Visual servo %s.",
+      visual_servo_enabled_ ? "enabled" : "disabled");
+  }
+}
+
+void WrenchControlNode::vs_active_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  visual_servo_active_ = msg->data;
+  last_vs_active_stamp_sec_ = this->now().seconds();
+  if (!visual_servo_active_) {
+    reset_visual_servo_pi();
+  }
+}
+
+void WrenchControlNode::vs_velocity_callback(
+  const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+{
+  latest_vs_cmd_camera_.setValue(
+    msg->twist.linear.x,
+    msg->twist.linear.y,
+    msg->twist.linear.z);
+  last_vs_cmd_stamp_sec_ = this->now().seconds();
+}
+
+void WrenchControlNode::vs_depth_callback(
+  const geometry_msgs::msg::Vector3Stamped::SharedPtr msg)
+{
+  latest_vs_depth_ = msg->vector.z;
+  last_vs_depth_stamp_sec_ = this->now().seconds();
+}
+
+void WrenchControlNode::reset_visual_servo_pi()
+{
+  vs_integral_error_.setZero();
+  filtered_vs_body_velocity_.setValue(0.0, 0.0, 0.0);
+}
+
+bool WrenchControlNode::get_visual_servo_body_velocity(tf2::Vector3 & desired_body_velocity)
+{
+  try {
+    geometry_msgs::msg::TransformStamped camera_to_robot_msg =
+      tf_buffer_->lookupTransform(robot_frame_, camera_frame_, tf2::TimePointZero);
+    tf2::Transform camera_to_robot_tf;
+    tf2::fromMsg(camera_to_robot_msg.transform, camera_to_robot_tf);
+    camera_to_robot_tf.setOrigin(tf2::Vector3(0.0, 0.0, 0.0));
+    desired_body_velocity = camera_to_robot_tf * latest_vs_cmd_camera_;
+    return true;
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(),
+      *this->get_clock(),
+      3000,
+      "Visual servo TF lookup failed: %s",
+      ex.what());
+    return false;
+  }
+}
+
+bool WrenchControlNode::rotate_vector_between_frames(
+  const tf2::Vector3 & input,
+  const std::string & target_frame,
+  const std::string & source_frame,
+  tf2::Vector3 & output)
+{
+  try {
+    geometry_msgs::msg::TransformStamped tf_msg =
+      tf_buffer_->lookupTransform(target_frame, source_frame, tf2::TimePointZero);
+    tf2::Transform tf;
+    tf2::fromMsg(tf_msg.transform, tf);
+    tf.setOrigin(tf2::Vector3(0.0, 0.0, 0.0));
+    output = tf * input;
+    return true;
+  } catch (const tf2::TransformException & ex) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(),
+      *this->get_clock(),
+      3000,
+      "Vector TF lookup failed (%s <- %s): %s",
+      target_frame.c_str(),
+      source_frame.c_str(),
+      ex.what());
+    return false;
+  }
+}
+
+double WrenchControlNode::compute_vs_force_lambda(double depth) const
+{
+  if (vs_depth_max_ <= vs_depth_min_) {
+    return depth <= vs_depth_min_ ? 1.0 : 0.0;
+  }
+  if (depth >= vs_depth_max_) {
+    return 0.0;
+  }
+  if (depth <= vs_depth_min_) {
+    return 1.0;
+  }
+
+  const double alpha = (depth - vs_depth_min_) / (vs_depth_max_ - vs_depth_min_);
+  return 0.5 * (1.0 + std::cos(kPi * alpha));
+}
+
+double WrenchControlNode::compute_vs_enable_ramp(double now_sec) const
+{
+  if (!visual_servo_enabled_) {
+    return 0.0;
+  }
+  if (vs_enable_ramp_sec_ <= 1e-3) {
+    return 1.0;
+  }
+  const double dt = now_sec - last_vs_enable_change_sec_;
+  return std::clamp(dt / vs_enable_ramp_sec_, 0.0, 1.0);
 }
 
 }  // namespace wrench_controller

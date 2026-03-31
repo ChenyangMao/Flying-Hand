@@ -21,6 +21,12 @@ cd Firmware/Flying-Hand-PX4
 make px4_sitl gz_hexa_scorpion
 ```
 
+## Build Visual Servo
+
+```
+sudo apt install ros-humble-ros-gzharmonic-bridge ros-humble-ros-gzharmonic-image
+```
+
 ## Build wrench controller
 
 ```
@@ -48,7 +54,9 @@ source $HOME/Flying-Hand/install/setup.bash
 ```
 make px4_sitl gz_hexa_scorpion
 ```
+
 Check PX4 offboard mode:
+
 ```
 listener offboard_control_mode
 ```
@@ -65,20 +73,33 @@ ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580
 ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 ```
 
+### Launch Visual Servo stack
+
+```
+ros2 launch core_visual_servo visual_servo.launch.py
+```
+
 ### Start ft bridge
 
 ```
 python3 scripts/gz_ft_bridge.py
 ```
 
-
-### Run test script
+### Run Wrench/Pos test script
 
 ```
 python3 scripts/test_wall_contact_ros2.py
 ```
 
+### Or Run Wrench/VS test script
+
+```
+python3 scripts/test_visual_servoing_ros2.py
+```
+
 ### Plot the control info
+
 ```
 python3 scripts/plot_thrust_live_ros2.py
 ```
+

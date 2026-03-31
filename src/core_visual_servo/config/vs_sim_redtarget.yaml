@@ -1,10 +1,15 @@
 # Visual servo — simulation (red target). ROS 2 parameter file.
 circle_detector:
   ros__parameters:
-    image_topic: /uav1/camera/color/image_raw
+    image_topic: /hexa_scorpion/camera/image_raw
     circle_topic: /detected_circle
+    debug_image_topic: /visual_servo/debug_image
     show_window: true
     desired_color: red
+    resize_scale: 1.0
+    min_radius_px: 20.0
+    red_min_saturation: 100
+    red_min_value: 60
 
 visual_servo_controller:
   ros__parameters:
@@ -12,9 +17,18 @@ visual_servo_controller:
     camera.fy: 753.64243411
     camera.cx: 512.0
     camera.cy: 384.0
-    target_center_y: 205.0
-    target_center_y_final: 205.0
+    target_center_y: 384.0
+    target_center_y_final: 384.0
     target_radius_pixel: 160.0
     target_radius_pixel_final: 175.0
     target_radius: 0.15
     target_x_bias: 0.0
+    odometry_topic: /mavros/local_position/odom
+    lost_target_timeout_sec: 0.6
+    lambda_gain: 2.0
+    forward_gain: 0.0005
+    max_cmd_camera_xy: 0.03
+    max_cmd_camera_z: 0.06
+    stationary_retarget_enable: false
+    stationary_speed_threshold: 0.01
+    stationary_count_threshold: 1000
