@@ -75,6 +75,12 @@ ros2 launch core_wrench_controller wrench_controller_gazebo.launch.py
 python3 scripts/gz_ft_bridge.py
 ```
 
+### Or start a simulated FT sensor
+
+```
+python3 scripts/sim_ft_sensor.py
+```
+
 
 ### Run test script
 
