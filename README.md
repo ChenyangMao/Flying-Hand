@@ -97,9 +97,15 @@ source /opt/ros/humble/setup.bash
 source /home/teamc/Flying-Hand/install/setup.bash
 python3 scripts/sim_ft_sensor.py
 ```
+### Feed the plot topics
+```
+source /opt/ros/humble/setup.bash
+source /home/teamc/Flying-Hand/install/setup.bash
+python3 scripts/test_plot_inputs_ros2.py
+```
 ### Plot
 ```
 source /opt/ros/humble/setup.bash
 source /home/teamc/Flying-Hand/install/setup.bash
-python3 scripts/plot_thrust_live_ros2.py --force-topic /ft_data
+python3 scripts/plot_thrust_live_ros2.py
 ```
