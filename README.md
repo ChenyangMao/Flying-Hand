@@ -93,20 +93,13 @@ python3 scripts/plot_thrust_live_ros2.py
 ### Start a simulated FT sensor
 
 ```
+source /opt/ros/humble/setup.bash
+source /home/teamc/Flying-Hand/install/setup.bash
 python3 scripts/sim_ft_sensor.py
 ```
-### On Jetson
+### Plot
 ```
 source /opt/ros/humble/setup.bash
 source /home/teamc/Flying-Hand/install/setup.bash
-export ROS_DOMAIN_ID=10
-export ROS_LOCALHOST_ONLY=0
-python3 scripts/sim_ft_sensor.py
-```
-### On PC
-```
-source /opt/ros/humble/setup.bash
-export ROS_DOMAIN_ID=10
-export ROS_LOCALHOST_ONLY=0
-ros2 topic echo /ft_data
+python3 scripts/plot_thrust_live_ros2.py --force-topic /ft_data
 ```
