@@ -9,7 +9,7 @@ This helper:
   - publishes ft_setpoint.x = 5 N
   - keeps wrench_controller/switch = true by default
   - subscribes to real odometry on /mavros/local_position/odom
-  - publishes tracking_point on each odometry message (same pose/twist/stamp)
+  - republishes each message on tracking_point (full copy: tracking = odometry)
   - publishes a lightweight synthetic attitude_thrust_command for plotting
 
 Typical usage:
@@ -26,6 +26,7 @@ Typical usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import math
 from typing import Optional
 
@@ -142,9 +143,7 @@ class PlotInputFeeder(Node):
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._latest_odom = msg
-        # Publish tracking immediately from this odom message so target pose matches
-        # the same snapshot as "current" on subscribers that also use latest odom.
-        # (Timer-only publishing can lag high-rate odom and show false position error.)
+        # tracking_point := full copy of this odometry (same pose/twist/covariance/stamp).
         self._publish_tracking_from_msg(msg)
 
     def _active_force_x(self, t: float) -> float:
@@ -186,13 +185,7 @@ class PlotInputFeeder(Node):
         self._switch_pub.publish(msg)
 
     def _publish_tracking_from_msg(self, src: Odometry) -> None:
-        msg = Odometry()
-        msg.header.stamp = src.header.stamp
-        msg.header.frame_id = src.header.frame_id
-        msg.child_frame_id = src.child_frame_id
-        msg.pose.pose = src.pose.pose
-        msg.twist.twist = src.twist.twist
-        self._tracking_pub.publish(msg)
+        self._tracking_pub.publish(copy.deepcopy(src))
 
     def _publish_thrust(self, force_x: float) -> None:
         msg = AttitudeThrust()
