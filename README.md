@@ -34,6 +34,7 @@ sudo apt update
 sudo apt install python3-colcon-common-extensions
 sudo apt install ros-humble-mavros-msgs
 sudo apt install ros-humble-mavros
+sudo apt install ros-humble-ros-gz-bridge
 source /opt/ros/humble/setup.bash
 sudo /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 cd Flying-Hand
