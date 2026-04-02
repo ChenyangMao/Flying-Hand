@@ -106,8 +106,6 @@ python3 scripts/plot_thrust_live_ros2.py
 
 ### Config environment for visual sevoing
 ```
-### Environment Change
-```
 sudo apt update
 sudo apt install ros-humble-ros-gzharmonic
 ```
