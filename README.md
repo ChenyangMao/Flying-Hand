@@ -17,7 +17,7 @@ make px4_sitl gazebo-classic_hexa_scorpion
 ## Gazebo harmonic simulation
 
 ```
-cd Firmware/Flying-Hand-PX4
+
 make px4_sitl gz_hexa_scorpion
 ```
 
@@ -104,3 +104,17 @@ python3 scripts/test_visual_servoing_ros2.py
 python3 scripts/plot_thrust_live_ros2.py
 ```
 
+### Config environment for visual sevoing
+```
+sudo apt install ros-humble-rqt ros-humble-rqt-image-view
+export QT_X11_NO_MITSHM=1
+ros2 run rqt_image_view rqt_image_view /visual_servo/debug_image
+ros2 topic list | grep visual_servo
+ros2 topic hz /visual_servo/debug_image
+ros2 topic echo /visual_servo/debug_image --once
+export QT_QPA_PLATFORM=xcb
+export QT_X11_NO_MITSHM=1
+echo $DISPLAY
+echo $XDG_SESSION_TYPE
+
+```
