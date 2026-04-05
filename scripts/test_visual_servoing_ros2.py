@@ -2,11 +2,23 @@
 """
 Visual-servo-guided wall contact test using ROS 2 + PX4 SITL + MAVROS.
 
-The script keeps `tracking_point` fixed at the hover pose during approach,
-publishes `/visual_servo/enable` so IBVS can drive the vehicle laterally and
-forward, and arms wrench control only after the estimated target depth enters
-the configured blend window. Once contact is confirmed from the F/T sensor,
-the task switches to sustained force hold, then detaches, retreats, and lands.
+During approach, `tracking_point` stays at the hover altitude. Horizontal
+position is fixed unless `approach_velocity` is non-zero: then the target
+creeps in map +X at that speed only while waiting for `/visual_servo/active`
+(lock). During lock confirmation and after visual servo is enabled, creep
+stops (zero tracking velocity) so IBVS is not fought.
+
+ROS parameters for approach / lock (this node):
+  pre_approach_hold_sec, hover_alt_tolerance — gate entry into APPROACH.
+  visual_servo_timeout_sec — max age of `/visual_servo/active` and depth msgs
+    to count as valid.
+  visual_servo_lock_confirm_sec — continuous lock required before enabling VS.
+  visual_servo_depth_max — depth threshold to start wrench blend.
+  approach_velocity — optional map +X creep (m/s) while lock is false; 0 = fixed.
+
+Publishes `/visual_servo/enable` so IBVS can drive the vehicle once lock is
+confirmed, and arms wrench control after depth enters the blend window. After
+F/T contact, the task switches to force hold, then detaches, retreats, and lands.
 """
 
 from enum import Enum, auto
@@ -51,10 +63,10 @@ class WallContactTester(Node):
         self.declare_parameter("contact_alt_tolerance", 0.15)
         self.declare_parameter("visual_servo_timeout_sec", 0.6)
         self.declare_parameter("visual_servo_lock_confirm_sec", 0.6)
-        self.declare_parameter("visual_servo_depth_max", 0.72)
+        self.declare_parameter("visual_servo_depth_max", 1.05)
         self.declare_parameter("desired_force", 5.0)
         self.declare_parameter("use_contact_force_sign_for_setpoint", True)
-        self.declare_parameter("approach_velocity", 0.1)
+        self.declare_parameter("approach_velocity", 0.0)
         self.declare_parameter("contact_push_velocity", 0.01)
         self.declare_parameter("contact_push_threshold", 0.8)
         self.declare_parameter("hold_time", 20.0)
@@ -100,7 +112,7 @@ class WallContactTester(Node):
         self.desired_force = float(self.get_parameter("desired_force").value)
         self.use_contact_force_sign_for_setpoint = bool(
             self.get_parameter("use_contact_force_sign_for_setpoint").value)
-        self.approach_velocity = self.get_parameter("approach_velocity").value
+        self.approach_velocity = float(self.get_parameter("approach_velocity").value)
         self.contact_push_velocity = float(self.get_parameter("contact_push_velocity").value)
         self.contact_push_threshold = float(self.get_parameter("contact_push_threshold").value)
         self.hold_time = float(self.get_parameter("hold_time").value)
@@ -473,18 +485,19 @@ class WallContactTester(Node):
     # ------------------------------------------------------------------ #
 
     def _step_approach(self) -> None:
-        self._command_vel_x = 0.0
-        self._command_vel_y = 0.0
-        self._command_vel_z = 0.0
-        self._command_target_z = self.takeoff_alt
-        self._publish_tracking_point_target()
-
         vs_locked = self._visual_servo_locked()
         depth_ready = self._visual_servo_depth_ready()
         depth = self.visual_servo_depth if depth_ready else None
         now = self.get_clock().now()
 
         if not vs_locked:
+            self._command_target_z = self.takeoff_alt
+            if self.approach_velocity != 0.0:
+                self._advance_tracking_target(self.approach_velocity, 0.0, 0.0)
+            else:
+                self._command_vel_x = 0.0
+                self._command_vel_y = 0.0
+                self._command_vel_z = 0.0
             self._set_visual_servo_enable(False)
             self._vs_lock_since = None
             if self._force_blend_started:
@@ -494,10 +507,17 @@ class WallContactTester(Node):
             self._set_wrench_switch(False)
             self._force_blend_started = False
             self._contact_candidate_since = None
+            self._publish_tracking_point_target()
             self.get_logger().info(
                 "Approach: waiting for visual target lock.",
                 throttle_duration_sec=1.0)
             return
+
+        self._command_vel_x = 0.0
+        self._command_vel_y = 0.0
+        self._command_vel_z = 0.0
+        self._command_target_z = self.takeoff_alt
+        self._publish_tracking_point_target()
 
         if self._vs_lock_since is None:
             self._vs_lock_since = now
