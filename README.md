@@ -90,7 +90,21 @@ python3 scripts/plot_thrust_live_ros2.py
 ```
 
 ## Deploy controller on Jetson Nano
-### Start a simulated FT sensor
+### Force sensor input (hardware)
+
+UDP bridge (publishes `geometry_msgs/WrenchStamped` on `ft_data`, same interface as the sim script):
+
+```
+source /opt/ros/humble/setup.bash
+source /home/teamc/Flying-Hand/install/setup.bash
+ros2 run ft_fz_udp_bridge udp_fz_bridge --ros-args \
+  -p udp_port:=5005 -p output_topic:=ft_data -p frame_id:=ft_sensor -p force_axis:=x \
+  -p force_sign:=-1.0
+```
+
+Add `-p force_sign:=-1.0` when the UDP readings are opposite in sign from what the controller expects (default `force_sign` is `1.0`).
+
+### Simulated FT sensor (desktop / no hardware)
 
 ```
 source /opt/ros/humble/setup.bash

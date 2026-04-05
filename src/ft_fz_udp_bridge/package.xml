@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ft_fz_udp_bridge</name>
+  <version>0.0.1</version>
+  <description>Receives Fz as UDP text and publishes geometry_msgs/WrenchStamped (default ft_data), same role as sim_ft_sensor for hardware.</description>
+  <maintainer email="maintainer@example.com">Flying-Hand</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
