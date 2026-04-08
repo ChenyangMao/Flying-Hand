@@ -6,36 +6,27 @@ wrench_controller:
     hover_thrust: 0.58
     max_tilt: 45.0
 
-    # Hybrid mix: lower pose weight on wall-normal so pose loop does not keep driving into the wall
-    # after brief contact (matches control_stack_base tuning intent; sim may need <=0.6).
     mix_vel_x: 0.0
     mix_vel_y: 1.0
     mix_vel_z: 1.0
 
-    # Same parameter as ROS1 control_stack_base (damps vz in force calculation).
     velx_damping_coefficient: 0.15
 
     visual_servo:
-      kp: [0.18, 0.14, 0.14]
+      kp: [0.18, 0.16, 0.16]
       ki: [0.0, 0.0, 0.0]
-      max_body_velocity: [0.08, 0.04, 0.05]
-      max_thrust_delta: [0.04, 0.03, 0.035]
+      max_body_velocity: [0.08, 0.06, 0.06]
+      max_thrust_delta: [0.04, 0.04, 0.04]
       thrust_z_damping_coeff: 0.01
-      cmd_alpha: 0.15
+      cmd_alpha: 0.22
       enable_ramp_sec: 1.8
       depth_min: 0.72
       depth_max: 1.05
       timeout_sec: 0.6
 
-    # Keep only a mild wall-normal feedforward so 5 N contact can be
-    # established quickly without continuously biasing the vehicle deeper
-    # into the wall during long holds.
     force_ff_coefficient: 0.015
     force_ff_coeffcient_bias: 0.005
 
-    # Hybrid force/position control on sensor-X (wall-normal):
-    #   Force PI tracks the desired contact force (fx setpoint).
-    #   Position PD (x_hold) provides damping around the contact reference.
     fx.P: 0.018
     fx.I: 0.012
     fx.D: 0.0
@@ -46,6 +37,5 @@ wrench_controller:
     x_hold.P: 0.04
     x_hold.D: 0.06
 
-    # Reduce filter delay so the force loop reacts faster around 5 N contact.
     median_filter_max_buffer_size: 7
     mean_filter_max_buffer_size: 5

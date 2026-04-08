@@ -17,8 +17,8 @@ visual_servo_controller:
     camera.fy: 744.96462268
     camera.cx: 512.0
     camera.cy: 384.0
-    target_center_y: 460.0
-    target_center_y_final: 460.0
+    target_center_y: 384.0
+    target_center_y_final: 384.0
     target_radius_pixel: 160.0
     target_radius_pixel_final: 175.0
     target_radius: 0.15
@@ -26,9 +26,9 @@ visual_servo_controller:
     odometry_topic: /mavros/local_position/odom
     lost_target_timeout_sec: 0.6
     lambda_gain: 2.5
-    forward_gain: 0.0003
+    forward_gain: 0.0005
     max_cmd_camera_xy: 0.10
-    max_cmd_camera_z: 0.045
+    max_cmd_camera_z: 0.06
     stationary_retarget_enable: false
     stationary_speed_threshold: 0.01
     stationary_count_threshold: 1000

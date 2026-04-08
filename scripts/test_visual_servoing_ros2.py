@@ -70,7 +70,7 @@ class WallContactTester(Node):
         self.declare_parameter("contact_push_velocity", 0.01)
         self.declare_parameter("contact_push_threshold", 0.8)
         self.declare_parameter("hold_time", 20.0)
-        self.declare_parameter("force_hold_tolerance", 1.0)
+        self.declare_parameter("force_hold_tolerance", 2.0)
         self.declare_parameter("max_hold_timeout", 90.0)
         self.declare_parameter("hold_force_nudge_vel", 0.003)
         self.declare_parameter("hold_force_nudge_deadband", 0.2)
@@ -78,7 +78,7 @@ class WallContactTester(Node):
         self.declare_parameter("hold_lateral_abort_y", 0.35)
         self.declare_parameter("hold_vertical_abort_z", 0.35)
         self.declare_parameter("sensor_frame", "ft_sensor")
-        self.declare_parameter("takeoff_altitude", 1.25)
+        self.declare_parameter("takeoff_altitude", 1.35)
         self.declare_parameter("takeoff_velocity", 0.3)
         self.declare_parameter("takeoff_alt_tolerance", 0.05)
         self.declare_parameter("takeoff_settle_vel", 0.08)
@@ -536,6 +536,7 @@ class WallContactTester(Node):
             current_pos = self.last_odom.pose.pose.position
             self._command_target_x = float(current_pos.x)
             self._command_target_y = float(current_pos.y)
+            self._command_target_z = float(current_pos.z)
             self._publish_tracking_point_target()
 
         self._set_visual_servo_enable(True)
