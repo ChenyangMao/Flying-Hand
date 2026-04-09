@@ -24,11 +24,11 @@ visual_servo_controller:
     target_radius: 0.15
     target_x_bias: 0.0
     odometry_topic: /mavros/local_position/odom
-    lost_target_timeout_sec: 0.6
-    lambda_gain: 2.5
-    forward_gain: 0.0005
+    lost_target_timeout_sec: 1.5
+    lambda_gain: 1.4
+    forward_gain: 0.0003
     max_cmd_camera_xy: 0.10
-    max_cmd_camera_z: 0.06
+    max_cmd_camera_z: 0.04
     stationary_retarget_enable: false
     stationary_speed_threshold: 0.01
     stationary_count_threshold: 1000

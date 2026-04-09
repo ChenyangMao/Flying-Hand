@@ -13,29 +13,29 @@ wrench_controller:
     velx_damping_coefficient: 0.15
 
     visual_servo:
-      kp: [0.18, 0.16, 0.16]
+      kp: [0.10, 0.14, 0.0]
       ki: [0.0, 0.0, 0.0]
-      max_body_velocity: [0.08, 0.06, 0.06]
-      max_thrust_delta: [0.04, 0.04, 0.04]
+      max_body_velocity: [0.05, 0.06, 0.0]
+      max_thrust_delta: [0.025, 0.03, 0.0]
       thrust_z_damping_coeff: 0.01
-      cmd_alpha: 0.22
-      enable_ramp_sec: 1.8
-      depth_min: 0.72
-      depth_max: 1.05
-      timeout_sec: 0.6
+      cmd_alpha: 0.30
+      enable_ramp_sec: 2.5
+      depth_min: 0.85
+      depth_max: 1.30
+      timeout_sec: 1.5
 
-    force_ff_coefficient: 0.015
-    force_ff_coeffcient_bias: 0.005
+    force_ff_coefficient: 0.010
+    force_ff_coeffcient_bias: 0.003
 
     fx.P: 0.018
-    fx.I: 0.012
+    fx.I: 0.008
     fx.D: 0.0
-    fx.integral_threshold: 20.0
+    fx.integral_threshold: 8.0
     fx.min: -0.8
     fx.max: 0.8
 
-    x_hold.P: 0.04
-    x_hold.D: 0.06
+    x_hold.P: 0.06
+    x_hold.D: 0.08
 
     median_filter_max_buffer_size: 7
     mean_filter_max_buffer_size: 5

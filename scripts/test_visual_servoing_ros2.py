@@ -60,10 +60,10 @@ class WallContactTester(Node):
         self.declare_parameter("force_threshold", 1.8)
         self.declare_parameter("contact_force_max", 8.0)
         self.declare_parameter("contact_confirm_sec", 0.15)
-        self.declare_parameter("contact_alt_tolerance", 0.15)
+        self.declare_parameter("contact_alt_tolerance", 0.25)
         self.declare_parameter("visual_servo_timeout_sec", 0.6)
         self.declare_parameter("visual_servo_lock_confirm_sec", 0.6)
-        self.declare_parameter("visual_servo_depth_max", 1.05)
+        self.declare_parameter("visual_servo_depth_max", 1.30)
         self.declare_parameter("desired_force", 5.0)
         self.declare_parameter("use_contact_force_sign_for_setpoint", True)
         self.declare_parameter("approach_velocity", 0.0)
@@ -78,10 +78,10 @@ class WallContactTester(Node):
         self.declare_parameter("hold_lateral_abort_y", 0.35)
         self.declare_parameter("hold_vertical_abort_z", 0.35)
         self.declare_parameter("sensor_frame", "ft_sensor")
-        self.declare_parameter("takeoff_altitude", 1.35)
+        self.declare_parameter("takeoff_altitude", 1.20)
         self.declare_parameter("takeoff_velocity", 0.3)
         self.declare_parameter("takeoff_alt_tolerance", 0.05)
-        self.declare_parameter("takeoff_settle_vel", 0.08)
+        self.declare_parameter("takeoff_settle_vel", 0.15)
         self.declare_parameter("takeoff_settle_sec", 0.5)
         self.declare_parameter("hover_alt_tolerance", 0.08)
         self.declare_parameter("pre_approach_hold_sec", 2.0)
@@ -220,6 +220,7 @@ class WallContactTester(Node):
         self._disarm_sent = False
         self._idle_logged = False
         self._force_blend_started = False
+        self._approach_start_y = 0.0
         self._target_initialized = False
         self._command_target_x = 0.0
         self._command_target_y = 0.0
@@ -478,6 +479,9 @@ class WallContactTester(Node):
             self.get_logger().info(
                 "Hover done. Entering approach and waiting for stable visual lock.")
             self._force_blend_started = False
+            if self.last_odom is not None:
+                self._approach_start_y = float(
+                    self.last_odom.pose.pose.position.y)
             self.state = TestState.APPROACH
 
     # ------------------------------------------------------------------ #
@@ -535,8 +539,8 @@ class WallContactTester(Node):
         if self.last_odom is not None:
             current_pos = self.last_odom.pose.pose.position
             self._command_target_x = float(current_pos.x)
-            self._command_target_y = float(current_pos.y)
-            self._command_target_z = float(current_pos.z)
+            self._command_target_y = self._approach_start_y
+            self._command_target_z = self.takeoff_alt
             self._publish_tracking_point_target()
 
         self._set_visual_servo_enable(True)
