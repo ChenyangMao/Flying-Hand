@@ -26,7 +26,7 @@ visual_servo_controller:
     odometry_topic: /mavros/local_position/odom
     lost_target_timeout_sec: 1.5
     lambda_gain: 1.4
-    forward_gain: 0.0003
+    forward_gain: 0.00035
     max_cmd_camera_xy: 0.10
     max_cmd_camera_z: 0.04
     stationary_retarget_enable: false

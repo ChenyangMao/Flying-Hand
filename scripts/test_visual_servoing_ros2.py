@@ -67,6 +67,7 @@ class WallContactTester(Node):
         self.declare_parameter("desired_force", 5.0)
         self.declare_parameter("use_contact_force_sign_for_setpoint", True)
         self.declare_parameter("approach_velocity", 0.0)
+        self.declare_parameter("approach_forward_offset", 0.12)
         self.declare_parameter("contact_push_velocity", 0.01)
         self.declare_parameter("contact_push_threshold", 0.8)
         self.declare_parameter("hold_time", 20.0)
@@ -81,10 +82,10 @@ class WallContactTester(Node):
         self.declare_parameter("takeoff_altitude", 1.20)
         self.declare_parameter("takeoff_velocity", 0.3)
         self.declare_parameter("takeoff_alt_tolerance", 0.05)
-        self.declare_parameter("takeoff_settle_vel", 0.15)
+        self.declare_parameter("takeoff_settle_vel", 0.10)
         self.declare_parameter("takeoff_settle_sec", 0.5)
         self.declare_parameter("hover_alt_tolerance", 0.08)
-        self.declare_parameter("pre_approach_hold_sec", 2.0)
+        self.declare_parameter("pre_approach_hold_sec", 3.0)
         self.declare_parameter("loop_rate", 100.0)
         self.declare_parameter("map_frame_id", "map")
         self.declare_parameter("map_ned_frame_id", "map_ned")
@@ -113,6 +114,7 @@ class WallContactTester(Node):
         self.use_contact_force_sign_for_setpoint = bool(
             self.get_parameter("use_contact_force_sign_for_setpoint").value)
         self.approach_velocity = float(self.get_parameter("approach_velocity").value)
+        self.approach_forward_offset = float(self.get_parameter("approach_forward_offset").value)
         self.contact_push_velocity = float(self.get_parameter("contact_push_velocity").value)
         self.contact_push_threshold = float(self.get_parameter("contact_push_threshold").value)
         self.hold_time = float(self.get_parameter("hold_time").value)
@@ -538,7 +540,10 @@ class WallContactTester(Node):
 
         if self.last_odom is not None:
             current_pos = self.last_odom.pose.pose.position
-            self._command_target_x = float(current_pos.x)
+            if not self._force_blend_started:
+                self._command_target_x = float(current_pos.x) + self.approach_forward_offset
+            else:
+                self._command_target_x = float(current_pos.x)
             self._command_target_y = self._approach_start_y
             self._command_target_z = self.takeoff_alt
             self._publish_tracking_point_target()
