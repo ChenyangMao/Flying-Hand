@@ -1,5 +1,7 @@
 """
-Read ATI Digital F/T streaming strain-gage samples from a serial port (default COM4).
+Read ATI Digital F/T streaming strain-gage samples from a serial port.
+
+Default device: COM4 on Windows; /dev/ttyUSB0 on Linux (override with --port).
 
 Based on ATI document 9620-05-Digital FT, section 8 (Programming Information):
 - Modbus RTU, slave address 10, even parity, 8 data bits
@@ -21,6 +23,12 @@ import struct
 import sys
 import time
 from pathlib import Path
+
+
+def _default_serial_port() -> str:
+    if sys.platform == "win32":
+        return "COM4"
+    return "/dev/ttyUSB0"
 
 try:
     import serial
@@ -361,7 +369,7 @@ def read_streaming_samples(
     if not ack_ok:
         print(
             "No valid Modbus ACK for start streaming. "
-            "Check COM port, baud, parity (even), wiring, and power.",
+            "Check serial port, baud, parity (even), wiring, and power.",
             file=sys.stderr,
         )
         return
@@ -488,8 +496,9 @@ def read_streaming_samples(
 
 
 def main() -> None:
+    default_port = _default_serial_port()
     p = argparse.ArgumentParser(
-        description="Read ATI Digital F/T from serial (e.g. COM4).",
+        description="Read ATI Digital F/T from serial (e.g. COM4 or /dev/ttyUSB0).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Shell tips:\n"
@@ -497,10 +506,14 @@ def main() -> None:
             "    --bias-demo-order=-2185,413,1026,-434,1826,1286\n"
             "    --bias-logical=-2185,490,1153,-130,1927,1595\n"
             "  Or quote the list: --bias-demo-order \"-2185,413,...\"\n"
-            "  PowerShell line continuation is backtick ` at end of line (not cmd's ^)."
+            "  Bash: use \\ at end of line for continuation; PowerShell: use backtick `."
         ),
     )
-    p.add_argument("--port", default="COM4", help="Serial port (default COM4)")
+    p.add_argument(
+        "--port",
+        default=default_port,
+        help=f"Serial port (default: {default_port!r} on this OS)",
+    )
     p.add_argument(
         "--baud",
         type=int,
@@ -624,7 +637,22 @@ def main() -> None:
             )
 
     max_samples = None if args.samples == 0 else args.samples
-    ser = open_port(args.port, args.baud, timeout=0.5)
+    ser: serial.Serial | None = None
+    try:
+        ser = open_port(args.port, args.baud, timeout=0.5)
+    except serial.SerialException as e:
+        en = getattr(e, "errno", None)
+        if en == 2 or (len(e.args) >= 1 and e.args[0] == 2):
+            print(
+                f"Cannot open {args.port!r}: no such file or device.\n"
+                "Is the USB/serial interface plugged in? List ports:\n"
+                "  python3 -m serial.tools.list_ports -v\n"
+                "Typical Linux devices: /dev/ttyUSB0, /dev/ttyACM0, /dev/ttyCH341USB",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Cannot open serial port {args.port!r}: {e}", file=sys.stderr)
+        raise SystemExit(2) from e
     try:
         if args.apply_gains_from_json is not None:
             gh, oh = load_gauge_hw_from_json(args.apply_gains_from_json)
@@ -652,7 +680,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
     finally:
-        if ser.is_open:
+        if ser is not None and ser.is_open:
             ser.close()
 
 
