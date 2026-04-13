@@ -19,7 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 "$ROOT_DIR/ft_sensor/read_digital_ft_linux.py" --port /dev/ttyUSB1 --cal-json FT33454_cal.json --tare-samples 50 \
+python3 "$ROOT_DIR/ft_sensor/read_digital_ft_linux.py" --port /dev/ttyUSB1 --cal-json "$ROOT_DIR/ft_sensor/FT33454_cal.json" --tare-samples 50 \
   --publish-ros-ft-data --ros-force-axis x --ros-force-sign -1.0 --samples 0 --baud 1250000 &
 PID_FT=$!
 
