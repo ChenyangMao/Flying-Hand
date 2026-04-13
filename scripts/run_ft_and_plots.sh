@@ -8,9 +8,20 @@ source /opt/ros/humble/setup.bash
 source "$ROOT_DIR/install/setup.bash"
 set -u
 
-python3 "$ROOT_DIR/scripts/test_plot_inputs_ros2.py"
-python3 "$ROOT_DIR/scripts/plot_thrust_live_ros2.py"
+python3 "$ROOT_DIR/scripts/test_plot_inputs_ros2.py" &
+PID_FEEDER=$!
+
+python3 "$ROOT_DIR/scripts/plot_thrust_live_ros2.py" &
+PID_PLOTTER=$!
+
+cleanup() {
+  kill "$PID_FEEDER" "$PID_PLOTTER" "${PID_FT:-}" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
 
 python3 "$ROOT_DIR/ft_sensor/read_digital_ft_linux.py" --port /dev/ttyUSB1 --cal-json FT33454_cal.json --tare-samples 50 \
-  --publish-ros-ft-data --ros-force-axis x --ros-force-sign -1.0 --samples 0 --baud 1250000
+  --publish-ros-ft-data --ros-force-axis x --ros-force-sign -1.0 --samples 0 --baud 1250000 &
+PID_FT=$!
+
+wait "$PID_FEEDER" "$PID_PLOTTER" "$PID_FT"
 
