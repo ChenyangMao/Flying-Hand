@@ -10,8 +10,11 @@ Based on ATI document 9620-05-Digital FT, section 8 (Programming Information):
 - Stop streaming: send >= 14 arbitrary bytes (jamming sequence)
 - Optional: write GaugeGains / GaugeOffsets (manual 8.6) via FC 106 unlock/lock + FC 16
   to holding registers 0x0000–0x000B before streaming.
+- Optional: publish the same scalar as UDP (calibrated Fz, N) as geometry_msgs/WrenchStamped
+  on ROS 2 (e.g. ``ft_data`` for wrench_controller on the same machine as Jetson).
 
 Requires: pip install pyserial
+ROS publish: also needs ``rclpy`` and ``geometry_msgs`` (same as ROS 2 workspace / apt ros-humble).
 """
 
 from __future__ import annotations
@@ -23,6 +26,16 @@ import struct
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
+
+
+class RosFtPublishConfig(NamedTuple):
+    """Publish calibrated Fz (same value as UDP) as WrenchStamped on one force axis."""
+
+    topic: str
+    frame_id: str
+    axis: str  # "x", "y", or "z"
+    force_sign: float
 
 
 def _default_serial_port() -> str:
@@ -360,6 +373,7 @@ def read_streaming_samples(
     demo_format: bool,
     fixed_bias_logical: list[float] | None,
     udp_publish: tuple[str, int] | None = None,
+    ros_ft_publish: RosFtPublishConfig | None = None,
 ) -> None:
     ser.reset_input_buffer()
     tx = build_start_streaming_frame()
@@ -392,6 +406,38 @@ def read_streaming_samples(
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         print(
             f"# UDP publish Fz → {udp_publish[0]}:{udp_publish[1]} (ASCII per datagram)",
+            file=sys.stderr,
+        )
+
+    ros_node = None
+    ros_pub = None
+    ros_inited = False
+    WrenchStamped = None  # type: ignore[assignment]
+    if ros_ft_publish is not None:
+        try:
+            import rclpy
+            from geometry_msgs.msg import WrenchStamped as _WrenchStamped
+
+            WrenchStamped = _WrenchStamped
+        except ImportError as e:
+            print(
+                "ROS publish requested but rclpy/geometry_msgs not available. "
+                "Install ROS 2 and: pip install rclpy (or use your underlay).",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from e
+        axis = ros_ft_publish.axis.lower().strip()
+        if axis not in ("x", "y", "z"):
+            print(f"Invalid ros force axis {ros_ft_publish.axis!r}", file=sys.stderr)
+            raise SystemExit(2)
+        rclpy.init(args=None)
+        ros_inited = True
+        ros_node = rclpy.create_node("read_digital_ft_linux")
+        ros_pub = ros_node.create_publisher(WrenchStamped, ros_ft_publish.topic, 10)
+        print(
+            f"# ROS2 publish Fz → WrenchStamped '{ros_ft_publish.topic}' "
+            f"(frame_id={ros_ft_publish.frame_id!r}, force.{axis}, "
+            f"force_sign={ros_ft_publish.force_sign})",
             file=sys.stderr,
         )
 
@@ -458,6 +504,21 @@ def read_streaming_samples(
                             udp_sock.close()
                             udp_sock = None
 
+                    if ros_pub is not None and ros_node is not None and ros_ft_publish is not None:
+                        assert WrenchStamped is not None
+                        fz_scaled = float(fxyz[2]) * float(ros_ft_publish.force_sign)
+                        wmsg = WrenchStamped()
+                        wmsg.header.stamp = ros_node.get_clock().now().to_msg()
+                        wmsg.header.frame_id = ros_ft_publish.frame_id
+                        ax = ros_ft_publish.axis.lower().strip()
+                        if ax == "x":
+                            wmsg.wrench.force.x = fz_scaled
+                        elif ax == "y":
+                            wmsg.wrench.force.y = fz_scaled
+                        else:
+                            wmsg.wrench.force.z = fz_scaled
+                        ros_pub.publish(wmsg)
+
                 if print_every <= 1 or (n % print_every == 0):
                     if demo_format:
                         lt = time.localtime()
@@ -485,6 +546,19 @@ def read_streaming_samples(
                             )
                         print(line)
     finally:
+        if ros_node is not None:
+            try:
+                ros_node.destroy_node()
+            except Exception:
+                pass
+        if ros_inited:
+            try:
+                import rclpy
+
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
         if udp_sock is not None:
             try:
                 udp_sock.close()
@@ -582,6 +656,38 @@ def main() -> None:
         metavar="HOST:PORT",
         help="Send each Fz (N) as one UDP datagram (UTF-8 text, newline-terminated) to Jetson or other host",
     )
+    p.add_argument(
+        "--publish-ros-ft-data",
+        action="store_true",
+        help="Publish each calibrated Fz (same as UDP) as geometry_msgs/WrenchStamped on ROS 2",
+    )
+    p.add_argument(
+        "--ros-ft-topic",
+        type=str,
+        default="ft_data",
+        metavar="TOPIC",
+        help="WrenchStamped topic when using --publish-ros-ft-data (default: ft_data)",
+    )
+    p.add_argument(
+        "--ros-frame-id",
+        type=str,
+        default="ft_sensor",
+        metavar="FRAME",
+        help="WrenchStamped header.frame_id (default: ft_sensor)",
+    )
+    p.add_argument(
+        "--ros-force-axis",
+        type=str,
+        choices=("x", "y", "z"),
+        default="z",
+        help="Which wrench.force axis carries Fz (default: z)",
+    )
+    p.add_argument(
+        "--ros-force-sign",
+        type=float,
+        default=1.0,
+        help="Multiply Fz before publishing (e.g. -1 to flip sign; default: 1)",
+    )
     args = p.parse_args()
 
     if args.no_stream and args.apply_gains_from_json is None:
@@ -626,6 +732,15 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(2) from e
+
+    ros_ft_cfg: RosFtPublishConfig | None = None
+    if args.publish_ros_ft_data:
+        ros_ft_cfg = RosFtPublishConfig(
+            topic=str(args.ros_ft_topic).strip() or "ft_data",
+            frame_id=str(args.ros_frame_id).strip() or "ft_sensor",
+            axis=str(args.ros_force_axis).lower().strip(),
+            force_sign=float(args.ros_force_sign),
+        )
 
     cal_m = cal_cf = cal_ct = None
     if args.cal_json is not None:
@@ -676,6 +791,7 @@ def main() -> None:
             demo_format=args.demo_format,
             fixed_bias_logical=fixed_bias,
             udp_publish=udp_target,
+            ros_ft_publish=ros_ft_cfg,
         )
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
