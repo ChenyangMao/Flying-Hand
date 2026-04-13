@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+set +u
 source /opt/ros/humble/setup.bash
 source "$ROOT_DIR/install/setup.bash"
+set -u
 
 python3 "$ROOT_DIR/scripts/test_plot_inputs_ros2.py"
 python3 "$ROOT_DIR/scripts/plot_thrust_live_ros2.py"
