@@ -261,7 +261,7 @@ def main() -> None:
     # ---- Panel 1: Force Fx tracking (force PI tuning) ---- #
     ln_f_des, = ax_force.plot([], [], color="#d97706", lw=1.6, label="Fx desired")
     ln_f_meas, = ax_force.plot([], [], color="#7c3aed", lw=1.5, label="Fx measured")
-    ln_f_err, = ax_force.plot([], [], color="#dc2626", lw=1.2, alpha=0.85, label="Fx error")
+    # ln_f_err, = ax_force.plot([], [], color="#dc2626", lw=1.2, alpha=0.85, label="Fx error")
     ax_force.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
     ax_force.set_ylabel("Force x (N)")
     ax_force.set_title("Hybrid Force/Position Control — Tuning Dashboard")
@@ -328,7 +328,7 @@ def main() -> None:
         t = d["t"]
         ln_f_des.set_data(t, d["f_des"])
         ln_f_meas.set_data(t, d["f_meas"])
-        ln_f_err.set_data(t, d["f_err"])
+        # ln_f_err.set_data(t, d["f_err"])
 
         ln_px.set_data(t, d["px"])
         ln_gx.set_data(t, d["gx"])
