@@ -2,12 +2,11 @@
 """
 Live monitoring dashboard for hybrid force/position control.
 
-The 5 subplots correspond to the main tuning concerns:
-  1. Force Fx tracking  - force PI tuning: measured force vs desired force vs error
-  2. X position         - position PD damping tuning: current x vs target x vs x error
-  3. Thrust output      - thrust commands: wrench x / pose y,z / ||T||
-  4. YZ position hold   - pose-controller hold quality: y error, z error
-  5. Attitude           - overall stability: pitch / roll
+Active subplots (others disabled to reduce load):
+  1. Force Fx tracking  - measured vs desired force
+  2. Thrust output      - thrust commands: wrench x / pose y,z / ||T||
+
+Disabled in code (commented in main): X position, YZ hold, attitude.
 
 Usage:
   python3 scripts/plot_thrust_live_ros2.py
@@ -250,9 +249,9 @@ def main() -> None:
     threading.Thread(target=executor.spin, daemon=True).start()
 
     fig, axes = plt.subplots(
-        5, 1, figsize=(13, 12), sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 0.8, 0.8, 0.7, 0.6]})
-    ax_force, ax_xpos, ax_thrust, ax_yz, ax_att = axes
+        2, 1, figsize=(13, 7), sharex=True,
+        gridspec_kw={"height_ratios": [1.0, 1.0]})
+    ax_force, ax_thrust = axes
     try:
         fig.canvas.manager.set_window_title("Hybrid Force/Position Control Monitor")
     except (AttributeError, TypeError):
@@ -273,20 +272,20 @@ def main() -> None:
         fontsize=9, family="monospace",
         bbox={"boxstyle": "round,pad=0.3", "fc": "white", "ec": "#cbd5e1", "alpha": 0.92})
 
-    # ---- Panel 2: X position (x_hold PD tuning) ---- #
-    ln_px, = ax_xpos.plot([], [], color="#2563eb", lw=1.5, label="current x")
-    ln_gx, = ax_xpos.plot([], [], color="#ea580c", lw=1.4, ls="--", label="target x")
-    ax_xpos_r = ax_xpos.twinx()
-    ln_xerr, = ax_xpos_r.plot([], [], color="#dc2626", lw=1.1, alpha=0.8, label="x error")
-    ax_xpos.set_ylabel("X position (m)")
-    ax_xpos_r.set_ylabel("X error (m)", color="#dc2626")
-    ax_xpos_r.tick_params(axis="y", labelcolor="#dc2626")
-    h1, l1 = ax_xpos.get_legend_handles_labels()
-    h2, l2 = ax_xpos_r.get_legend_handles_labels()
-    ax_xpos.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8)
-    ax_xpos.grid(True, alpha=0.25)
+    # ---- Panel 2: X position (x_hold PD tuning) — disabled ---- #
+    # ln_px, = ax_xpos.plot([], [], color="#2563eb", lw=1.5, label="current x")
+    # ln_gx, = ax_xpos.plot([], [], color="#ea580c", lw=1.4, ls="--", label="target x")
+    # ax_xpos_r = ax_xpos.twinx()
+    # ln_xerr, = ax_xpos_r.plot([], [], color="#dc2626", lw=1.1, alpha=0.8, label="x error")
+    # ax_xpos.set_ylabel("X position (m)")
+    # ax_xpos_r.set_ylabel("X error (m)", color="#dc2626")
+    # ax_xpos_r.tick_params(axis="y", labelcolor="#dc2626")
+    # h1, l1 = ax_xpos.get_legend_handles_labels()
+    # h2, l2 = ax_xpos_r.get_legend_handles_labels()
+    # ax_xpos.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8)
+    # ax_xpos.grid(True, alpha=0.25)
 
-    # ---- Panel 3: Thrust output ---- #
+    # ---- Thrust output ---- #
     ln_tx, = ax_thrust.plot([], [], "r-", lw=1.6, label="thrust.x (wrench)")
     ln_ty, = ax_thrust.plot([], [], "g-", lw=1.0, alpha=0.7, label="thrust.y (pose)")
     ln_tz, = ax_thrust.plot([], [], "b-", lw=1.0, alpha=0.7, label="thrust.z (pose)")
@@ -299,22 +298,22 @@ def main() -> None:
                      loc="upper right", fontsize=8)
     ax_thrust.grid(True, alpha=0.25)
 
-    # ---- Panel 4: YZ position hold (pose controller) ---- #
-    ln_yerr, = ax_yz.plot([], [], color="#059669", lw=1.4, label="y error")
-    ln_zerr, = ax_yz.plot([], [], color="#2563eb", lw=1.4, label="z error")
-    ax_yz.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
-    ax_yz.set_ylabel("Position error (m)")
-    ax_yz.legend(loc="upper right", fontsize=8)
-    ax_yz.grid(True, alpha=0.25)
+    # ---- YZ position hold — disabled ---- #
+    # ln_yerr, = ax_yz.plot([], [], color="#059669", lw=1.4, label="y error")
+    # ln_zerr, = ax_yz.plot([], [], color="#2563eb", lw=1.4, label="z error")
+    # ax_yz.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
+    # ax_yz.set_ylabel("Position error (m)")
+    # ax_yz.legend(loc="upper right", fontsize=8)
+    # ax_yz.grid(True, alpha=0.25)
 
-    # ---- Panel 5: Attitude ---- #
-    ln_pitch, = ax_att.plot([], [], color="#0f766e", lw=1.4, label="pitch (deg)")
-    ln_roll, = ax_att.plot([], [], color="#7c2d12", lw=1.1, alpha=0.75, label="roll (deg)")
-    ax_att.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
-    ax_att.set_xlabel("time (s)")
-    ax_att.set_ylabel("Attitude (deg)")
-    ax_att.legend(loc="upper right", fontsize=8)
-    ax_att.grid(True, alpha=0.25)
+    # ---- Attitude — disabled ---- #
+    # ln_pitch, = ax_att.plot([], [], color="#0f766e", lw=1.4, label="pitch (deg)")
+    # ln_roll, = ax_att.plot([], [], color="#7c2d12", lw=1.1, alpha=0.75, label="roll (deg)")
+    # ax_att.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
+    ax_thrust.set_xlabel("time (s)")
+    # ax_att.set_ylabel("Attitude (deg)")
+    # ax_att.legend(loc="upper right", fontsize=8)
+    # ax_att.grid(True, alpha=0.25)
 
     # ---- mode background shading state ---- #
     mode_spans: List[Any] = []
@@ -330,9 +329,9 @@ def main() -> None:
         ln_f_meas.set_data(t, d["f_meas"])
         # ln_f_err.set_data(t, d["f_err"])
 
-        ln_px.set_data(t, d["px"])
-        ln_gx.set_data(t, d["gx"])
-        ln_xerr.set_data(t, d["x_err"])
+        # ln_px.set_data(t, d["px"])
+        # ln_gx.set_data(t, d["gx"])
+        # ln_xerr.set_data(t, d["x_err"])
 
         ln_tx.set_data(t, d["tx"])
         ln_ty.set_data(t, d["ty"])
@@ -340,11 +339,11 @@ def main() -> None:
         if ln_mag is not None:
             ln_mag.set_data(t, d["mag"])
 
-        ln_yerr.set_data(t, d["y_err"])
-        ln_zerr.set_data(t, d["z_err"])
+        # ln_yerr.set_data(t, d["y_err"])
+        # ln_zerr.set_data(t, d["z_err"])
 
-        ln_pitch.set_data(t, d["pitch"])
-        ln_roll.set_data(t, d["roll"])
+        # ln_pitch.set_data(t, d["pitch"])
+        # ln_roll.set_data(t, d["roll"])
 
         # mode shading: light red background when wrench active
         for sp in mode_spans:
@@ -360,7 +359,7 @@ def main() -> None:
                         j += 1
                     t_start = t[i]
                     t_end = t[min(j, len(t) - 1)]
-                    for ax in axes:
+                    for ax in (ax_force, ax_thrust):
                         sp = ax.axvspan(t_start, t_end,
                                         alpha=0.08, color="#ef4444", zorder=0)
                         mode_spans.append(sp)
@@ -383,11 +382,11 @@ def main() -> None:
             f"Pos err: x={xe:+.3f}  y={ye:+.3f}  z={ze:+.3f} m\n"
             f"thrust.x={thr_x:+.4f}")
 
-        for ax in axes:
+        for ax in (ax_force, ax_thrust):
             ax.relim()
             ax.autoscale_view()
-        ax_xpos_r.relim()
-        ax_xpos_r.autoscale_view()
+        # ax_xpos_r.relim()
+        # ax_xpos_r.autoscale_view()
         return []
 
     _ = animation.FuncAnimation(
