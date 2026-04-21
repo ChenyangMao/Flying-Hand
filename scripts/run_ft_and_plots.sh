@@ -11,11 +11,17 @@ set -u
 python3 "$ROOT_DIR/scripts/test_plot_inputs_ros2.py" &
 PID_FEEDER=$!
 
+PID_FILTER=""
+if [[ "${USE_EXTERNAL_FT_FILTER:-0}" == "1" ]]; then
+  ros2 run ft_wrench_filter wrench_filter --ros-args -p input_topic:=ft_data -p output_topic:=ft_data_filtered -p alpha:=0.2 &
+  PID_FILTER=$!
+fi
+
 python3 "$ROOT_DIR/scripts/plot_thrust_live_ros2.py" &
 PID_PLOTTER=$!
 
 cleanup() {
-  kill "$PID_FEEDER" "$PID_PLOTTER" "${PID_FT:-}" 2>/dev/null || true
+  kill "$PID_FEEDER" "${PID_FILTER:-}" "$PID_PLOTTER" "${PID_FT:-}" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -23,5 +29,5 @@ python3 "$ROOT_DIR/ft_sensor/read_digital_ft_linux.py" --port /dev/ttyUSB1 --cal
   --publish-ros-ft-data --ros-force-axis x --ros-force-sign -1.0 --samples 0 --baud 1250000 &
 PID_FT=$!
 
-wait "$PID_FEEDER" "$PID_PLOTTER" "$PID_FT"
+wait "$PID_FEEDER" ${PID_FILTER:+$PID_FILTER} "$PID_PLOTTER" "$PID_FT"
 

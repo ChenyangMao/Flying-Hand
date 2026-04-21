@@ -2,11 +2,10 @@
 """
 Live monitoring dashboard for hybrid force/position control.
 
-Active subplots (others disabled to reduce load):
-  1. Force Fx tracking  - measured vs desired force
-  2. Thrust output      - thrust commands: wrench x / pose y,z / ||T||
-
-Disabled in code (commented in main): X position, YZ hold, attitude.
+Active subplots:
+  1. Force Fx (raw)     - ft_data: measured vs desired
+  2. Force Fx (filtered)- ft_data_filtered: measured vs desired
+  3. Thrust output      - wrench x / pose y,z / ||T||
 
 Usage:
   python3 scripts/plot_thrust_live_ros2.py
@@ -36,8 +35,10 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--topic", default="attitude_thrust_command",
                     help="AttitudeThrust topic")
+    p.add_argument("--raw-force-topic", default="ft_data",
+                    help="Unfiltered measured force (WrenchStamped)")
     p.add_argument("--force-topic", default="ft_data_filtered",
-                    help="Measured force topic (WrenchStamped)")
+                    help="Filtered measured force (WrenchStamped)")
     p.add_argument("--force-setpoint-topic", default="ft_setpoint",
                     help="Desired force topic (WrenchStamped)")
     p.add_argument("--odom-topic", default="mavros/local_position/odom",
@@ -93,7 +94,8 @@ class HybridControlMonitor(Node):
         self._tz: Deque[float] = deque(maxlen=n)
         self._pitch_deg: Deque[float] = deque(maxlen=n)
         self._roll_deg: Deque[float] = deque(maxlen=n)
-        self._f_meas_x: Deque[float] = deque(maxlen=n)
+        self._f_meas_raw_x: Deque[float] = deque(maxlen=n)
+        self._f_meas_filt_x: Deque[float] = deque(maxlen=n)
         self._f_des_x: Deque[float] = deque(maxlen=n)
         self._pos_x: Deque[float] = deque(maxlen=n)
         self._pos_y: Deque[float] = deque(maxlen=n)
@@ -106,7 +108,8 @@ class HybridControlMonitor(Node):
         # ---- latest values (updated asynchronously by callbacks) ---- #
         self._lat_thrust = [0.0, 0.0, 0.0]
         self._lat_att = [0.0, 0.0, 0.0, 1.0]
-        self._lat_f_meas = 0.0
+        self._lat_f_meas_raw = 0.0
+        self._lat_f_meas_filt = 0.0
         self._lat_f_des = 0.0
         self._lat_pos = [0.0, 0.0, 0.0]
         self._lat_tgt = [0.0, 0.0, 0.0]
@@ -116,7 +119,9 @@ class HybridControlMonitor(Node):
         self.create_subscription(
             AttitudeThrust, args.topic, self._thrust_cb, 10)
         self.create_subscription(
-            WrenchStamped, args.force_topic, self._force_cb, 10)
+            WrenchStamped, args.raw_force_topic, self._force_raw_cb, 10)
+        self.create_subscription(
+            WrenchStamped, args.force_topic, self._force_filt_cb, 10)
         self.create_subscription(
             WrenchStamped, args.force_setpoint_topic, self._setpoint_cb, 10)
 
@@ -148,8 +153,12 @@ class HybridControlMonitor(Node):
             float(msg.attitude.z), float(msg.attitude.w)]
         self._has_data = True
 
-    def _force_cb(self, msg: WrenchStamped) -> None:
-        self._lat_f_meas = float(msg.wrench.force.x)
+    def _force_raw_cb(self, msg: WrenchStamped) -> None:
+        self._lat_f_meas_raw = float(msg.wrench.force.x)
+        self._has_data = True
+
+    def _force_filt_cb(self, msg: WrenchStamped) -> None:
+        self._lat_f_meas_filt = float(msg.wrench.force.x)
         self._has_data = True
 
     def _setpoint_cb(self, msg: WrenchStamped) -> None:
@@ -188,7 +197,8 @@ class HybridControlMonitor(Node):
             self._tz.append(self._lat_thrust[2])
             self._pitch_deg.append(math.degrees(pitch))
             self._roll_deg.append(math.degrees(roll))
-            self._f_meas_x.append(self._lat_f_meas)
+            self._f_meas_raw_x.append(self._lat_f_meas_raw)
+            self._f_meas_filt_x.append(self._lat_f_meas_filt)
             self._f_des_x.append(self._lat_f_des)
             self._pos_x.append(self._lat_pos[0])
             self._pos_y.append(self._lat_pos[1])
@@ -208,7 +218,9 @@ class HybridControlMonitor(Node):
                 "t": list(self._t),
                 "tx": list(self._tx), "ty": list(self._ty), "tz": list(self._tz),
                 "pitch": list(self._pitch_deg), "roll": list(self._roll_deg),
-                "f_meas": list(self._f_meas_x), "f_des": list(self._f_des_x),
+                "f_raw": list(self._f_meas_raw_x),
+                "f_filt": list(self._f_meas_filt_x),
+                "f_des": list(self._f_des_x),
                 "px": list(self._pos_x), "py": list(self._pos_y), "pz": list(self._pos_z),
                 "gx": list(self._tgt_x), "gy": list(self._tgt_y), "gz": list(self._tgt_z),
                 "mode": list(self._mode_val),
@@ -228,7 +240,8 @@ class HybridControlMonitor(Node):
                     raw[k] = raw[k][start:]
 
         # derived signals
-        raw["f_err"] = [d - m for d, m in zip(raw["f_des"], raw["f_meas"])]
+        raw["f_err_raw"] = [d - m for d, m in zip(raw["f_des"], raw["f_raw"])]
+        raw["f_err"] = [d - m for d, m in zip(raw["f_des"], raw["f_filt"])]
         raw["x_err"] = [g - p for g, p in zip(raw["gx"], raw["px"])]
         raw["y_err"] = [g - p for g, p in zip(raw["gy"], raw["py"])]
         raw["z_err"] = [g - p for g, p in zip(raw["gz"], raw["pz"])]
@@ -249,43 +262,38 @@ def main() -> None:
     threading.Thread(target=executor.spin, daemon=True).start()
 
     fig, axes = plt.subplots(
-        2, 1, figsize=(13, 7), sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 1.0]})
-    ax_force, ax_thrust = axes
+        3, 1, figsize=(13, 9), sharex=True,
+        gridspec_kw={"height_ratios": [1.0, 1.0, 1.0]})
+    ax_force_raw, ax_force_filt, ax_thrust = axes
     try:
         fig.canvas.manager.set_window_title("Hybrid Force/Position Control Monitor")
     except (AttributeError, TypeError):
         pass
 
-    # ---- Panel 1: Force Fx tracking (force PI tuning) ---- #
-    ln_f_des, = ax_force.plot([], [], color="#d97706", lw=1.6, label="Fx desired")
-    ln_f_meas, = ax_force.plot([], [], color="#7c3aed", lw=1.5, label="Fx measured")
-    # ln_f_err, = ax_force.plot([], [], color="#dc2626", lw=1.2, alpha=0.85, label="Fx error")
-    ax_force.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
-    ax_force.set_ylabel("Force x (N)")
-    ax_force.set_title("Hybrid Force/Position Control — Tuning Dashboard")
-    ax_force.legend(loc="upper right", fontsize=8)
-    ax_force.grid(True, alpha=0.25)
+    # ---- Panel 1: raw force (ft_data) ---- #
+    ln_f_des_r, = ax_force_raw.plot([], [], color="#d97706", lw=1.6, label="Fx desired")
+    ln_f_raw, = ax_force_raw.plot([], [], color="#7c3aed", lw=1.5, label="Fx measured (raw)")
+    ax_force_raw.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
+    ax_force_raw.set_ylabel("Force x (N)")
+    ax_force_raw.set_title("Force — raw (ft_data)")
+    ax_force_raw.legend(loc="upper right", fontsize=8)
+    ax_force_raw.grid(True, alpha=0.25)
 
-    status_text = ax_force.text(
-        0.01, 0.97, "", transform=ax_force.transAxes, va="top", ha="left",
+    status_text = ax_force_raw.text(
+        0.01, 0.97, "", transform=ax_force_raw.transAxes, va="top", ha="left",
         fontsize=9, family="monospace",
         bbox={"boxstyle": "round,pad=0.3", "fc": "white", "ec": "#cbd5e1", "alpha": 0.92})
 
-    # ---- Panel 2: X position (x_hold PD tuning) — disabled ---- #
-    # ln_px, = ax_xpos.plot([], [], color="#2563eb", lw=1.5, label="current x")
-    # ln_gx, = ax_xpos.plot([], [], color="#ea580c", lw=1.4, ls="--", label="target x")
-    # ax_xpos_r = ax_xpos.twinx()
-    # ln_xerr, = ax_xpos_r.plot([], [], color="#dc2626", lw=1.1, alpha=0.8, label="x error")
-    # ax_xpos.set_ylabel("X position (m)")
-    # ax_xpos_r.set_ylabel("X error (m)", color="#dc2626")
-    # ax_xpos_r.tick_params(axis="y", labelcolor="#dc2626")
-    # h1, l1 = ax_xpos.get_legend_handles_labels()
-    # h2, l2 = ax_xpos_r.get_legend_handles_labels()
-    # ax_xpos.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8)
-    # ax_xpos.grid(True, alpha=0.25)
+    # ---- Panel 2: filtered force (ft_data_filtered) ---- #
+    ln_f_des_f, = ax_force_filt.plot([], [], color="#d97706", lw=1.6, label="Fx desired")
+    ln_f_filt, = ax_force_filt.plot([], [], color="#2563eb", lw=1.5, label="Fx measured (filtered)")
+    ax_force_filt.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
+    ax_force_filt.set_ylabel("Force x (N)")
+    ax_force_filt.set_title("Force — filtered (ft_data_filtered)")
+    ax_force_filt.legend(loc="upper right", fontsize=8)
+    ax_force_filt.grid(True, alpha=0.25)
 
-    # ---- Thrust output ---- #
+    # ---- Panel 3: Thrust output ---- #
     ln_tx, = ax_thrust.plot([], [], "r-", lw=1.6, label="thrust.x (wrench)")
     ln_ty, = ax_thrust.plot([], [], "g-", lw=1.0, alpha=0.7, label="thrust.y (pose)")
     ln_tz, = ax_thrust.plot([], [], "b-", lw=1.0, alpha=0.7, label="thrust.z (pose)")
@@ -298,22 +306,7 @@ def main() -> None:
                      loc="upper right", fontsize=8)
     ax_thrust.grid(True, alpha=0.25)
 
-    # ---- YZ position hold — disabled ---- #
-    # ln_yerr, = ax_yz.plot([], [], color="#059669", lw=1.4, label="y error")
-    # ln_zerr, = ax_yz.plot([], [], color="#2563eb", lw=1.4, label="z error")
-    # ax_yz.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
-    # ax_yz.set_ylabel("Position error (m)")
-    # ax_yz.legend(loc="upper right", fontsize=8)
-    # ax_yz.grid(True, alpha=0.25)
-
-    # ---- Attitude — disabled ---- #
-    # ln_pitch, = ax_att.plot([], [], color="#0f766e", lw=1.4, label="pitch (deg)")
-    # ln_roll, = ax_att.plot([], [], color="#7c2d12", lw=1.1, alpha=0.75, label="roll (deg)")
-    # ax_att.axhline(0, color="#94a3b8", lw=0.7, ls="--", alpha=0.5)
     ax_thrust.set_xlabel("time (s)")
-    # ax_att.set_ylabel("Attitude (deg)")
-    # ax_att.legend(loc="upper right", fontsize=8)
-    # ax_att.grid(True, alpha=0.25)
 
     # ---- mode background shading state ---- #
     mode_spans: List[Any] = []
@@ -325,25 +318,16 @@ def main() -> None:
             return []
 
         t = d["t"]
-        ln_f_des.set_data(t, d["f_des"])
-        ln_f_meas.set_data(t, d["f_meas"])
-        # ln_f_err.set_data(t, d["f_err"])
-
-        # ln_px.set_data(t, d["px"])
-        # ln_gx.set_data(t, d["gx"])
-        # ln_xerr.set_data(t, d["x_err"])
+        ln_f_des_r.set_data(t, d["f_des"])
+        ln_f_raw.set_data(t, d["f_raw"])
+        ln_f_des_f.set_data(t, d["f_des"])
+        ln_f_filt.set_data(t, d["f_filt"])
 
         ln_tx.set_data(t, d["tx"])
         ln_ty.set_data(t, d["ty"])
         ln_tz.set_data(t, d["tz"])
         if ln_mag is not None:
             ln_mag.set_data(t, d["mag"])
-
-        # ln_yerr.set_data(t, d["y_err"])
-        # ln_zerr.set_data(t, d["z_err"])
-
-        # ln_pitch.set_data(t, d["pitch"])
-        # ln_roll.set_data(t, d["roll"])
 
         # mode shading: light red background when wrench active
         for sp in mode_spans:
@@ -359,7 +343,7 @@ def main() -> None:
                         j += 1
                     t_start = t[i]
                     t_end = t[min(j, len(t) - 1)]
-                    for ax in (ax_force, ax_thrust):
+                    for ax in (ax_force_raw, ax_force_filt, ax_thrust):
                         sp = ax.axvspan(t_start, t_end,
                                         alpha=0.08, color="#ef4444", zorder=0)
                         mode_spans.append(sp)
@@ -369,24 +353,25 @@ def main() -> None:
 
         # status text
         mode_str = "HYBRID (wrench x + pose yz)" if d["mode"][-1] > 0.5 else "POSE ONLY (xyz)"
-        fx_m = d["f_meas"][-1]
+        fx_raw = d["f_raw"][-1]
+        fx_filt = d["f_filt"][-1]
         fx_d = d["f_des"][-1]
-        fx_e = d["f_err"][-1]
+        fx_e_raw = d["f_err_raw"][-1]
+        fx_e_filt = d["f_err"][-1]
         xe = d["x_err"][-1]
         ye = d["y_err"][-1]
         ze = d["z_err"][-1]
         thr_x = d["tx"][-1]
         status_text.set_text(
             f"MODE: {mode_str}\n"
-            f"Fx: meas={fx_m:+.2f}  des={fx_d:+.2f}  err={fx_e:+.2f} N\n"
+            f"Fx raw:    meas={fx_raw:+.2f}  des={fx_d:+.2f}  err={fx_e_raw:+.2f} N\n"
+            f"Fx filtered: meas={fx_filt:+.2f}  des={fx_d:+.2f}  err={fx_e_filt:+.2f} N\n"
             f"Pos err: x={xe:+.3f}  y={ye:+.3f}  z={ze:+.3f} m\n"
             f"thrust.x={thr_x:+.4f}")
 
-        for ax in (ax_force, ax_thrust):
+        for ax in (ax_force_raw, ax_force_filt, ax_thrust):
             ax.relim()
             ax.autoscale_view()
-        # ax_xpos_r.relim()
-        # ax_xpos_r.autoscale_view()
         return []
 
     _ = animation.FuncAnimation(

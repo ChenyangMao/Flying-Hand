@@ -4,13 +4,15 @@ Publish the extra ROS 2 topics needed by plot_thrust_live_ros2.py while using
 the real odometry topic from this repository.
 
 This helper:
-  - reads measured force from /ft_data when available
-  - republishes it on /ft_data_filtered for the plot script
   - publishes ft_setpoint.x = 5 N
   - keeps wrench_controller/switch = true by default
   - subscribes to real odometry on /mavros/local_position/odom
   - republishes each message on tracking_point (full copy: tracking = odometry)
   - publishes a lightweight synthetic attitude_thrust_command for plotting
+
+When using an external force filter (ft_data -> ft_data_filtered), do NOT republish
+force inside this helper. Let the force source publish ft_data, the filter publish
+ft_data_filtered, and downstream nodes (plot/controller) subscribe to ft_data_filtered.
 
 Typical usage:
   Terminal 1:
@@ -60,10 +62,6 @@ def _quat_from_rpy(roll: float, pitch: float, yaw: float) -> Quaternion:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-force-topic", default="ft_data",
-                        help="Measured force input topic (default: ft_data)")
-    parser.add_argument("--force-topic", default="ft_data_filtered",
-                        help="Force topic published for plotting (default: ft_data_filtered)")
     parser.add_argument("--force-setpoint-topic", default="ft_setpoint",
                         help="Desired force topic (default: ft_setpoint)")
     parser.add_argument("--switch-topic", default="wrench_controller/switch",
@@ -106,16 +104,11 @@ class PlotInputFeeder(Node):
         self._t0 = self.get_clock().now().nanoseconds * 1e-9
 
         self._latest_force_x = args.desired_force
-        self._latest_force_msg: Optional[WrenchStamped] = None
-        self._last_force_rx_sec: Optional[float] = None
         self._latest_odom: Optional[Odometry] = None
 
         self.create_subscription(
-            WrenchStamped, args.input_force_topic, self._force_cb, 10)
-        self.create_subscription(
             Odometry, args.odom_topic, self._odom_cb, 10)
 
-        self._force_pub = self.create_publisher(WrenchStamped, args.force_topic, 10)
         self._setpoint_pub = self.create_publisher(
             WrenchStamped, args.force_setpoint_topic, 10)
         self._switch_pub = self.create_publisher(Bool, args.switch_topic, 10)
@@ -127,19 +120,12 @@ class PlotInputFeeder(Node):
 
         self.get_logger().info(
             "PlotInputFeeder publishing: "
-            f"force='{args.force_topic}', "
             f"setpoint='{args.force_setpoint_topic}', "
             f"switch='{args.switch_topic}', "
             f"tracking='{args.tracking_topic}', "
             f"thrust='{args.topic}'. "
-            f"External force input='{args.input_force_topic}', "
             f"real odom='{args.odom_topic}'."
         )
-
-    def _force_cb(self, msg: WrenchStamped) -> None:
-        self._latest_force_msg = msg
-        self._latest_force_x = float(msg.wrench.force.x)
-        self._last_force_rx_sec = self.get_clock().now().nanoseconds * 1e-9
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._latest_odom = msg
@@ -147,30 +133,11 @@ class PlotInputFeeder(Node):
         self._publish_tracking_from_msg(msg)
 
     def _active_force_x(self, t: float) -> float:
-        now_sec = self.get_clock().now().nanoseconds * 1e-9
-        if self._last_force_rx_sec is not None and now_sec - self._last_force_rx_sec < 1.0:
-            return self._latest_force_x
         return (
             self._args.desired_force +
             self._args.fallback_force_amp *
             math.sin(2.0 * math.pi * self._args.fallback_force_freq * t)
         )
-
-    def _publish_force(self, force_x: float) -> None:
-        msg = WrenchStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        if self._latest_force_msg is not None and self._latest_force_msg.header.frame_id:
-            msg.header.frame_id = self._latest_force_msg.header.frame_id
-        else:
-            msg.header.frame_id = self._args.sensor_frame
-        msg.wrench.force.x = force_x
-        if self._latest_force_msg is not None:
-            msg.wrench.force.y = float(self._latest_force_msg.wrench.force.y)
-            msg.wrench.force.z = float(self._latest_force_msg.wrench.force.z)
-            msg.wrench.torque.x = float(self._latest_force_msg.wrench.torque.x)
-            msg.wrench.torque.y = float(self._latest_force_msg.wrench.torque.y)
-            msg.wrench.torque.z = float(self._latest_force_msg.wrench.torque.z)
-        self._force_pub.publish(msg)
 
     def _publish_setpoint(self) -> None:
         msg = WrenchStamped()
@@ -217,7 +184,6 @@ class PlotInputFeeder(Node):
         t = self.get_clock().now().nanoseconds * 1e-9 - self._t0
         force_x = self._active_force_x(t)
 
-        self._publish_force(force_x)
         self._publish_setpoint()
         self._publish_switch()
         self._publish_thrust(force_x)

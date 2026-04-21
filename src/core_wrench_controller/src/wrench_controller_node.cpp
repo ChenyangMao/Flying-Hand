@@ -83,6 +83,11 @@ bool WrenchControlNode::initialize()
     this->declare_parameter<bool>("ft_data.publish", true);
   publish_filtered_ft_data_ = publish_filtered_ft_data;
 
+  std::string ft_input_topic =
+    this->declare_parameter<std::string>("ft_data.input_topic", "ft_data");
+  std::string ft_filtered_topic =
+    this->declare_parameter<std::string>("ft_data.filtered_topic", "ft_data_filtered");
+
   double force_ff_coefficient =
     this->declare_parameter<double>("force_ff_coefficient", 0.01);
   double force_ff_coefficient_bias =
@@ -221,9 +226,11 @@ bool WrenchControlNode::initialize()
   command_pub_ = this->create_publisher<mav_msgs::msg::AttitudeThrust>(
     "attitude_thrust_command", 10);
 
-  // Filtered FT data publisher (sensor frame)
-  filtered_ft_data_pub_ =
-    this->create_publisher<geometry_msgs::msg::WrenchStamped>("ft_data_filtered", 10);
+  // Filtered FT data publisher (optional; disable when using an external filter node)
+  if (publish_filtered_ft_data_) {
+    filtered_ft_data_pub_ =
+      this->create_publisher<geometry_msgs::msg::WrenchStamped>(ft_filtered_topic, 10);
+  }
 
   // Core wrench controller instance
   wrench_controller_ = std::make_unique<wrench_controller::WrenchController>(
@@ -254,7 +261,7 @@ bool WrenchControlNode::initialize()
 
   // Subscriptions for F/T data, setpoint and odometry
   ft_data_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-    "ft_data",
+    ft_input_topic,
     10,
     std::bind(&WrenchControlNode::ft_data_callback, this, std::placeholders::_1));
 

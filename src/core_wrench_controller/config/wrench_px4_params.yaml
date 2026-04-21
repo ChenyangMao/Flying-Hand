@@ -66,6 +66,10 @@ wrench_controller:
     fz.min: -0.3
     fz.max: 0.3
 
+    # Default (no external filter): controller subscribes to ft_data and publishes ft_data_filtered.
+    # If you use an external filter (ft_data -> ft_data_filtered), override these at runtime:
+    #   -p ft_data.input_topic:=ft_data_filtered -p ft_data.filter:=false -p ft_data.publish:=false
+    ft_data.input_topic: "ft_data"
     ft_data.filter: true
     ft_data.publish: true
 

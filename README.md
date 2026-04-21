@@ -117,6 +117,24 @@ source /opt/ros/humble/setup.bash
 source /home/teamc/Flying-Hand/install/setup.bash
 python3 scripts/test_plot_inputs_ros2.py
 ```
+
+### Optional: external force filter (ft_data -> ft_data_filtered)
+By default, `core_wrench_controller` subscribes to `ft_data` and publishes `ft_data_filtered` itself.
+If you want to use the standalone filter node instead, run:
+
+```
+source /opt/ros/humble/setup.bash
+source /home/teamc/Flying-Hand/install/setup.bash
+ros2 run ft_wrench_filter wrench_filter --ros-args \
+  -p input_topic:=ft_data -p output_topic:=ft_data_filtered -p alpha:=0.2
+```
+
+And override the controller parameters at runtime:
+
+```
+-p ft_data.input_topic:=ft_data_filtered -p ft_data.filter:=false -p ft_data.publish:=false
+```
+
 ### Plot
 ```
 source /opt/ros/humble/setup.bash
