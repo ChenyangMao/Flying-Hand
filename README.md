@@ -1,4 +1,4 @@
-# Flying-Hand
+# Flying-Hand (Aerial Manipulator for Non Destructive Testing)
 
 ## Introduction
 
