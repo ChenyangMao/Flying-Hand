@@ -109,3 +109,19 @@ python3 scripts/plot_thrust_live_ros2.py
 sudo apt update
 sudo apt install ros-humble-ros-gzharmonic
 ```
+
+
+### TODO: Hardware Readiness improvements and tests
+sim-to-hardware deployment — hardened detection, safety watchdogs, hw launch stack
+
+- color_circle_detection: add circularity check, temporal consistency gate, min contour area
+- IBVS: EMA smoothing on detections/depth, velocity rate limiter, state reset on target loss
+- wrench_controller_node: sensor-dropout watchdog (odom/FT), auto-disable wrench on stale data
+- test_visual_servoing_ros2: hard force abort (15N), odom/FT dropout abort during flight
+- New hw config: wrench_px4_hw_params.yaml (geofence on, conservative PID, x_hold PD)
+- New hw launches: wrench_controller_hw.launch.py, visual_servo_hw.launch.py
+- New hw stack script: run_hw_stack.sh (MAVROS + wrench + VS for real drone)
+- New validation scripts: test_hw_readiness, test_ft_sensor, test_camera_detection, test_flight_stages
+- New FT bridge: ft_sensor_bridge.py for real hardware sensor
+- Updated vs_exp.yaml with full IBVS + detection params for hardware
+- Default show_window=false in all configs
