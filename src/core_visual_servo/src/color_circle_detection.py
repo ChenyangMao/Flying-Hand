@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # pure perception node
+import math
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -17,12 +19,16 @@ class ColorCircleDetector(Node):
         self.declare_parameter("image_topic", "/uav1/camera/color/image_raw")
         self.declare_parameter("circle_topic", "/detected_circle")
         self.declare_parameter("debug_image_topic", "/visual_servo/debug_image")
-        self.declare_parameter("show_window", True)
+        self.declare_parameter("show_window", False)
         self.declare_parameter("desired_color", "red")
         self.declare_parameter("resize_scale", 1.0)
         self.declare_parameter("min_radius_px", 20.0)
         self.declare_parameter("red_min_saturation", 100)
         self.declare_parameter("red_min_value", 60)
+        self.declare_parameter("min_contour_area", 300.0)
+        self.declare_parameter("min_circularity", 0.6)
+        self.declare_parameter("temporal_consistency_px", 60.0)
+        self.declare_parameter("temporal_consistency_frames", 3)
 
         self.image_topic = self.get_parameter("image_topic").get_parameter_value().string_value
         self.circle_topic = self.get_parameter("circle_topic").get_parameter_value().string_value
@@ -34,15 +40,29 @@ class ColorCircleDetector(Node):
         self.min_radius_px = float(self.get_parameter("min_radius_px").value)
         self.red_min_saturation = int(self.get_parameter("red_min_saturation").value)
         self.red_min_value = int(self.get_parameter("red_min_value").value)
+        self.min_contour_area = float(self.get_parameter("min_contour_area").value)
+        self.min_circularity = float(self.get_parameter("min_circularity").value)
+        self.temporal_consistency_px = float(self.get_parameter("temporal_consistency_px").value)
+        self.temporal_consistency_frames = int(self.get_parameter("temporal_consistency_frames").value)
         self.desired_color = (
             self.get_parameter("desired_color").get_parameter_value().string_value or "red"
         ).lower()
+
+        # Temporal consistency state
+        self._prev_center = None  # (x, y) of last accepted detection in full-res coords
+        self._consistent_count = 0  # consecutive frames matching previous detection
 
         self.get_logger().info(f"Detecting color: {self.desired_color}")
         self.get_logger().info(f"show_window: {self.show_window}")
         self.get_logger().info(
             f"image_topic: {self.image_topic}, resize_scale: {self.resize_scale}, "
             f"min_radius_px: {self.min_radius_px}"
+        )
+        self.get_logger().info(
+            f"min_contour_area: {self.min_contour_area}, "
+            f"min_circularity: {self.min_circularity:.2f}, "
+            f"temporal_consistency: {self.temporal_consistency_frames} frames "
+            f"within {self.temporal_consistency_px:.0f} px"
         )
         self.get_logger().info(
             f"red threshold: S>={self.red_min_saturation}, V>={self.red_min_value}"
@@ -108,35 +128,71 @@ class ColorCircleDetector(Node):
         best_circle = None
         best_score = -1.0
         for cnt in contours:
+            area = float(cv2.contourArea(cnt))
+            if area < self.min_contour_area:
+                continue
             (x, y), radius = cv2.minEnclosingCircle(cnt)
-            if radius > self.min_radius_px:
-                score = float(cv2.contourArea(cnt))
-                if score > best_score:
-                    best_score = score
-                    best_circle = (x, y, radius)
+            if radius < self.min_radius_px:
+                continue
+            # Circularity: ratio of contour area to enclosing circle area
+            enclosing_area = math.pi * radius * radius
+            circularity = area / enclosing_area if enclosing_area > 0.0 else 0.0
+            if circularity < self.min_circularity:
+                continue
+            if area > best_score:
+                best_score = area
+                best_circle = (x, y, radius)
 
         if best_circle is not None:
             x, y, radius = best_circle
             center = (int(x / scale), int(y / scale))
             radius_int = int(radius / scale)
-            out = Vector3()
-            out.x = float(center[0])
-            out.y = float(center[1])
-            out.z = float(radius_int)
-            self.circle_pub.publish(out)
-            cv2.circle(frame_full, center, radius_int, (0, 255, 0), 2)
+
+            # Temporal consistency gate: require N consecutive frames with
+            # the detection center within a pixel distance of the previous.
+            publish = True
+            if self.temporal_consistency_frames > 1:
+                if self._prev_center is not None:
+                    dist = math.hypot(
+                        center[0] - self._prev_center[0],
+                        center[1] - self._prev_center[1],
+                    )
+                    if dist <= self.temporal_consistency_px:
+                        self._consistent_count += 1
+                    else:
+                        self._consistent_count = 1
+                else:
+                    self._consistent_count = 1
+                self._prev_center = center
+                if self._consistent_count < self.temporal_consistency_frames:
+                    publish = False
+
+            if publish:
+                out = Vector3()
+                out.x = float(center[0])
+                out.y = float(center[1])
+                out.z = float(radius_int)
+                self.circle_pub.publish(out)
+
+            color = (0, 255, 0) if publish else (0, 200, 255)
+            cv2.circle(frame_full, center, radius_int, color, 2)
             cv2.circle(frame_full, center, 2, (0, 0, 255), 3)
+            label = f"circle: u={center[0]} v={center[1]} r={radius_int}"
+            if not publish:
+                label += f" (confirming {self._consistent_count}/{self.temporal_consistency_frames})"
             cv2.putText(
                 frame_full,
-                f"circle: u={center[0]} v={center[1]} r={radius_int}",
+                label,
                 (20, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
-                (0, 255, 0),
+                color,
                 2,
                 cv2.LINE_AA,
             )
         else:
+            self._prev_center = None
+            self._consistent_count = 0
             cv2.putText(
                 frame_full,
                 "circle: none",

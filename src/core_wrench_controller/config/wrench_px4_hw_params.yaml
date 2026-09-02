@@ -1,0 +1,65 @@
+# Hardware overrides (loaded after wrench_px4_params.yaml on the real drone).
+#
+# IMPORTANT: Measure hover_thrust on the actual drone before first flight.
+# Arm with no payload, hover manually, and record the average thrust value.
+# All force PID gains start ~30% below sim values for safety; increase
+# incrementally during tethered flight tests.
+
+wrench_controller:
+  ros__parameters:
+    # --- Thrust / tilt limits ---
+    # Adjust hover_thrust after measuring on the real drone.
+    hover_thrust: 0.56
+    thrust_max: 0.75
+    thrust_min: 0.1
+    max_tilt: 35.0
+
+    # --- Geofence (ENABLED for hardware) ---
+    geofence.enable: true
+    geofence.x_min: -1.0
+    geofence.x_max: 10.0
+    geofence.y_min: -5.0
+    geofence.y_max: 5.0
+    geofence.z_min: 0.0
+    geofence.z_max: 3.0
+
+    # --- Force axis mixing ---
+    # 0.0 = wrench controller has 100% authority on x-axis thrust during contact.
+    mix_vel_x: 0.0
+    mix_vel_y: 1.0
+    mix_vel_z: 1.0
+
+    velx_damping_coefficient: 0.10
+
+    # --- Visual servo gains (conservative for hardware) ---
+    visual_servo:
+      kp: [0.08, 0.10, 0.0]
+      ki: [0.0, 0.0, 0.0]
+      max_body_velocity: [0.04, 0.04, 0.0]
+      max_thrust_delta: [0.02, 0.02, 0.0]
+      thrust_z_damping_coeff: 0.01
+      cmd_alpha: 0.20
+      enable_ramp_sec: 3.0
+      depth_min: 0.60
+      depth_max: 1.00
+      timeout_sec: 0.8
+
+    # --- Force feedforward ---
+    force_ff_coefficient: 0.010
+    force_ff_coeffcient_bias: 0.003
+
+    # --- Force PID (conservative: ~30% below sim Gazebo values) ---
+    fx.P: 0.012
+    fx.I: 0.005
+    fx.D: 0.0
+    fx.integral_threshold: 6.0
+    fx.min: -0.5
+    fx.max: 0.5
+
+    # Position hold PD during contact (prevents drift along wall normal)
+    x_hold.P: 0.04
+    x_hold.D: 0.06
+
+    # --- F/T data filtering (slightly more aggressive than sim) ---
+    median_filter_max_buffer_size: 9
+    mean_filter_max_buffer_size: 7

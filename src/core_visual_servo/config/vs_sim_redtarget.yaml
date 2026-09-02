@@ -4,7 +4,7 @@ circle_detector:
     image_topic: /hexa_scorpion/camera/image_raw
     circle_topic: /detected_circle
     debug_image_topic: /visual_servo/debug_image
-    show_window: true
+    show_window: false
     desired_color: red
     resize_scale: 1.0
     min_radius_px: 20.0

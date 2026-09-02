@@ -1,20 +1,56 @@
 # Visual servo — hardware / experiment. ROS 2 parameter file.
+#
+# IMPORTANT: Before flight, verify:
+#   1. image_topic matches the real camera driver topic.
+#   2. camera.fx/fy/cx/cy are from the actual camera calibration.
+#   3. target_radius matches the physical target diameter / 2 (meters).
+
 circle_detector:
   ros__parameters:
+    # Camera driver topic (adjust to match your real camera)
     image_topic: /uav1/camera/color/image_raw
     circle_topic: /detected_circle
+    debug_image_topic: /visual_servo/debug_image
     show_window: false
     desired_color: red
+    resize_scale: 1.0
+    min_radius_px: 15.0
+    red_min_saturation: 100
+    red_min_value: 60
+    # Hardware-hardened detection parameters
+    min_contour_area: 400.0
+    min_circularity: 0.55
+    temporal_consistency_px: 50.0
+    temporal_consistency_frames: 3
 
 visual_servo_controller:
   ros__parameters:
+    # Camera intrinsics — replace with calibrated values from your camera
     camera.fx: 744.96462268
     camera.fy: 753.64243411
     camera.cx: 512.0
     camera.cy: 384.0
+    # Target pixel setpoints
     target_center_y: 338.0
     target_center_y_final: 315.0
     target_radius_pixel: 50.0
     target_radius_pixel_final: 78.0
+    # Physical target radius in meters
     target_radius: 0.1
     target_x_bias: 0.0
+    odometry_topic: /mavros/local_position/odom
+    lost_target_timeout_sec: 1.0
+    # IBVS gains (conservative for hardware)
+    lambda_gain: 1.0
+    forward_gain: 0.00025
+    max_cmd_camera_xy: 0.06
+    max_cmd_camera_z: 0.03
+    # EMA smoothing and rate limiting
+    detection_ema_alpha: 0.35
+    depth_ema_alpha: 0.25
+    max_cmd_rate_xy: 0.015
+    max_cmd_rate_z: 0.02
+    # Stationary retarget (disable for hardware by default)
+    stationary_retarget_enable: false
+    stationary_speed_threshold: 0.01
+    stationary_count_threshold: 1000

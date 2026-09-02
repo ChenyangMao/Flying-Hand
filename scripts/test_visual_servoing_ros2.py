@@ -80,7 +80,7 @@ class WallContactTester(Node):
         self.declare_parameter("hold_vertical_abort_z", 0.35)
         self.declare_parameter("sensor_frame", "ft_sensor")
         self.declare_parameter("takeoff_altitude", 1.20)
-        self.declare_parameter("takeoff_velocity", 0.3)
+        self.declare_parameter("takeoff_velocity", 0.15)
         self.declare_parameter("takeoff_alt_tolerance", 0.05)
         self.declare_parameter("takeoff_settle_vel", 0.10)
         self.declare_parameter("takeoff_settle_sec", 0.5)
@@ -99,6 +99,9 @@ class WallContactTester(Node):
         self.declare_parameter("retreat_duration_sec", 4.0)
         self.declare_parameter("land_velocity", 0.25)
         self.declare_parameter("land_alt_threshold", 0.12)
+        self.declare_parameter("force_hard_abort_limit", 15.0)
+        self.declare_parameter("odom_dropout_timeout_sec", 0.5)
+        self.declare_parameter("ft_dropout_timeout_sec", 0.5)
 
         force_topic = self.get_parameter("force_topic").value
         self.force_threshold = float(self.get_parameter("force_threshold").value)
@@ -147,6 +150,9 @@ class WallContactTester(Node):
         self.retreat_duration_sec = float(self.get_parameter("retreat_duration_sec").value)
         self.land_velocity = float(self.get_parameter("land_velocity").value)
         self.land_alt_threshold = float(self.get_parameter("land_alt_threshold").value)
+        self.force_hard_abort_limit = float(self.get_parameter("force_hard_abort_limit").value)
+        self.odom_dropout_timeout_sec = float(self.get_parameter("odom_dropout_timeout_sec").value)
+        self.ft_dropout_timeout_sec = float(self.get_parameter("ft_dropout_timeout_sec").value)
 
         # --------------- MAVROS publishers / subscribers --------------- #
         state_qos = QoSProfile(
@@ -222,6 +228,9 @@ class WallContactTester(Node):
         self._disarm_sent = False
         self._idle_logged = False
         self._force_blend_started = False
+        self._last_odom_time: Optional[Time] = None
+        self._last_ft_time: Optional[Time] = None
+        self._hard_abort_triggered = False
         self._approach_start_y = 0.0
         self._target_initialized = False
         self._command_target_x = 0.0
@@ -260,11 +269,13 @@ class WallContactTester(Node):
     def _odom_callback(self, msg: Odometry) -> None:
         self.current_alt = msg.pose.pose.position.z
         self.last_odom = msg
+        self._last_odom_time = self.get_clock().now()
 
     def _ft_callback(self, msg: WrenchStamped) -> None:
         self.last_force_msg = msg
         self.last_fx_raw = float(msg.wrench.force.x)
         self.last_fx_abs = abs(self.last_fx_raw)
+        self._last_ft_time = self.get_clock().now()
 
     def _visual_servo_active_cb(self, msg: Bool) -> None:
         self.visual_servo_active = bool(msg.data)
@@ -287,6 +298,49 @@ class WallContactTester(Node):
         self._publish_base_to_frd_tf()
         self._publish_base_to_sensor_tf()
         self._publish_map_to_contact_tf()
+
+        # --- Safety watchdogs (active during flight states) --- #
+        if self.state not in (TestState.PREFLIGHT, TestState.IDLE):
+            now = self.get_clock().now()
+
+            # Hard force abort: if |Fx| exceeds a critical limit, immediately
+            # disengage force control and retreat to prevent structural damage.
+            if (self.force_hard_abort_limit > 0.0 and
+                    self.last_fx_abs > self.force_hard_abort_limit and
+                    not self._hard_abort_triggered):
+                self._hard_abort_triggered = True
+                self.get_logger().error(
+                    f"HARD ABORT: |Fx|={self.last_fx_abs:.2f} N exceeds "
+                    f"limit {self.force_hard_abort_limit:.1f} N. "
+                    "Disabling wrench control and retreating.")
+                self._finish_hold()
+                return
+
+            # Odometry dropout: if no odom arrives for too long, fall back to
+            # wrench-off hover so the pose controller does not accumulate stale error.
+            if (self._last_odom_time is not None and
+                    self.state in (TestState.APPROACH, TestState.HOLD_FORCE)):
+                odom_age = (now - self._last_odom_time).nanoseconds * 1e-9
+                if odom_age > self.odom_dropout_timeout_sec:
+                    self.get_logger().warn(
+                        f"Odometry dropout ({odom_age:.2f}s). "
+                        "Disabling wrench control, retreating.",
+                        throttle_duration_sec=1.0)
+                    self._finish_hold()
+                    return
+
+            # FT sensor dropout: if force data goes stale during force hold,
+            # detach to avoid applying unmonitored force.
+            if (self.state == TestState.HOLD_FORCE and
+                    self._last_ft_time is not None):
+                ft_age = (now - self._last_ft_time).nanoseconds * 1e-9
+                if ft_age > self.ft_dropout_timeout_sec:
+                    self.get_logger().warn(
+                        f"FT sensor dropout ({ft_age:.2f}s) during force hold. "
+                        "Aborting hold.",
+                        throttle_duration_sec=1.0)
+                    self._finish_hold()
+                    return
 
         handler = {
             TestState.PREFLIGHT: self._step_preflight,

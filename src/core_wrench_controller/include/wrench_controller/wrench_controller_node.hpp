@@ -119,6 +119,13 @@ private:
   double force_ff_coefficient_bias_{0.05};
   double velx_damping_coefficient_{0.0};
 
+  // Sensor-dropout watchdog: disable wrench control if odom or FT data
+  // goes stale for longer than these thresholds (seconds).
+  double odom_dropout_timeout_sec_{0.5};
+  double ft_dropout_timeout_sec_{0.5};
+  double last_odom_stamp_sec_{0.0};
+  double last_ft_stamp_sec_{0.0};
+
   // Pose controller for motion control
   std::unique_ptr<pose_controller::PoseController> pose_controller_;
 

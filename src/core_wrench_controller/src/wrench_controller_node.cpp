@@ -92,6 +92,11 @@ bool WrenchControlNode::initialize()
   velx_damping_coefficient_ =
     this->declare_parameter<double>("velx_damping_coefficient", 0.0);
 
+  odom_dropout_timeout_sec_ =
+    this->declare_parameter<double>("odom_dropout_timeout_sec", 0.5);
+  ft_dropout_timeout_sec_ =
+    this->declare_parameter<double>("ft_dropout_timeout_sec", 0.5);
+
   RCLCPP_INFO(
     this->get_logger(),
     "mix_vel (pose weight per axis) = (%.2f, %.2f, %.2f) → wrench force gain (1-mix) = (%.2f, %.2f, %.2f)",
@@ -342,6 +347,32 @@ bool WrenchControlNode::execute()
 {
   if (!pose_controller_ || !wrench_controller_) {
     return true;
+  }
+
+  // Sensor-dropout watchdog: if odometry or FT data is stale while wrench
+  // control is active, fall back to pose-only mode to prevent runaway.
+  if (mode_switch_) {
+    const double now_sec = this->now().seconds();
+    if (last_odom_stamp_sec_ > 0.0 &&
+      (now_sec - last_odom_stamp_sec_) > odom_dropout_timeout_sec_)
+    {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Odometry dropout (%.2fs stale). Disabling wrench control.",
+        now_sec - last_odom_stamp_sec_);
+      mode_switch_ = false;
+      wrench_controller_->reset();
+    }
+    if (last_ft_stamp_sec_ > 0.0 &&
+      (now_sec - last_ft_stamp_sec_) > ft_dropout_timeout_sec_)
+    {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "FT sensor dropout (%.2fs stale). Disabling wrench control.",
+        now_sec - last_ft_stamp_sec_);
+      mode_switch_ = false;
+      wrench_controller_->reset();
+    }
   }
 
   // Pose controller: compute desired thrust from motion control
@@ -649,6 +680,8 @@ void WrenchControlNode::ft_data_callback(
       msg->wrench.force.x, msg->wrench.force.y, msg->wrench.force.z);
   }
 
+  last_ft_stamp_sec_ = this->now().seconds();
+
   auto filtered = wrench_controller_->update_state(*msg, *tf_buffer_);
 
   if (publish_filtered_ft_data_ && filtered_ft_data_pub_) {
@@ -680,6 +713,7 @@ void WrenchControlNode::tracking_point_callback(
 void WrenchControlNode::odometry_callback(
   const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  last_odom_stamp_sec_ = this->now().seconds();
   current_body_velocity_.setValue(
     msg->twist.twist.linear.x,
     msg->twist.twist.linear.y,

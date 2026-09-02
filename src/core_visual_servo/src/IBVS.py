@@ -38,6 +38,10 @@ class VisualServo(Node):
         self.declare_parameter("forward_gain", 0.0005)
         self.declare_parameter("max_cmd_camera_xy", 0.03)
         self.declare_parameter("max_cmd_camera_z", 0.06)
+        self.declare_parameter("detection_ema_alpha", 0.4)
+        self.declare_parameter("depth_ema_alpha", 0.3)
+        self.declare_parameter("max_cmd_rate_xy", 0.02)
+        self.declare_parameter("max_cmd_rate_z", 0.03)
         self.declare_parameter("stationary_retarget_enable", False)
         self.declare_parameter("stationary_speed_threshold", 0.01)
         self.declare_parameter("stationary_count_threshold", 1000)
@@ -54,6 +58,10 @@ class VisualServo(Node):
         self.forward_gain = float(self.get_parameter("forward_gain").value)
         self.max_cmd_camera_xy = float(self.get_parameter("max_cmd_camera_xy").value)
         self.max_cmd_camera_z = float(self.get_parameter("max_cmd_camera_z").value)
+        self.detection_ema_alpha = float(self.get_parameter("detection_ema_alpha").value)
+        self.depth_ema_alpha = float(self.get_parameter("depth_ema_alpha").value)
+        self.max_cmd_rate_xy = float(self.get_parameter("max_cmd_rate_xy").value)
+        self.max_cmd_rate_z = float(self.get_parameter("max_cmd_rate_z").value)
         self.stationary_retarget_enable = bool(
             self.get_parameter("stationary_retarget_enable").value
         )
@@ -66,6 +74,16 @@ class VisualServo(Node):
         self.K = np.array(
             [[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]]
         )
+
+        # EMA state for detection smoothing
+        self._ema_u = None
+        self._ema_v = None
+        self._ema_r = None
+        self._ema_depth = None
+        # Previous command for rate limiting
+        self._prev_cmd_x = 0.0
+        self._prev_cmd_y = 0.0
+        self._prev_cmd_z = 0.0
 
         target_center_y = float(self.get_parameter("target_center_y").value)
         self.target_center_y_final = float(
@@ -121,6 +139,18 @@ class VisualServo(Node):
             setattr(self, last_attr, now)
             self.get_logger().info(text)
 
+    def _ema(self, prev, new, alpha):
+        """Exponential moving average helper."""
+        if prev is None:
+            return new
+        return prev * (1.0 - alpha) + new * alpha
+
+    def _rate_limit(self, prev, target, max_delta):
+        """Clamp the change per step to max_delta."""
+        delta = target - prev
+        delta = np.clip(delta, -max_delta, max_delta)
+        return prev + delta
+
     def circle_cb(self, msg: Vector3):
         self._throttle_info(
             "_last_circle_log_t",
@@ -128,17 +158,28 @@ class VisualServo(Node):
             f"Circle detected at: ({msg.x}, {msg.y}) with radius {msg.z}",
         )
 
-        u = float(msg.x)
-        v = float(msg.y)
-        r = float(msg.z)
+        u_raw = float(msg.x)
+        v_raw = float(msg.y)
+        r_raw = float(msg.z)
 
-        if r <= 0.0:
+        if r_raw <= 0.0:
             return
 
         self._last_circle_t = self.get_clock().now()
         self._publish_active(True, force=True)
 
-        depth = (self.fx * self.target_radius) / r
+        # EMA smoothing on detected circle coordinates
+        alpha = self.detection_ema_alpha
+        self._ema_u = self._ema(self._ema_u, u_raw, alpha)
+        self._ema_v = self._ema(self._ema_v, v_raw, alpha)
+        self._ema_r = self._ema(self._ema_r, r_raw, alpha)
+        u = self._ema_u
+        v = self._ema_v
+        r = self._ema_r
+
+        depth_raw = (self.fx * self.target_radius) / r
+        self._ema_depth = self._ema(self._ema_depth, depth_raw, self.depth_ema_alpha)
+        depth = self._ema_depth
 
         depth_msg = Vector3Stamped()
         depth_msg.header.stamp = self.get_clock().now().to_msg()
@@ -182,20 +223,27 @@ class VisualServo(Node):
             self.max_cmd_camera_z,
         )
 
+        # Rate-limit the velocity commands to prevent sudden spikes
+        cmd_x = self._rate_limit(self._prev_cmd_x, float(v_camera[0]), self.max_cmd_rate_xy)
+        cmd_y = self._rate_limit(self._prev_cmd_y, float(v_camera[1]), self.max_cmd_rate_xy)
+        cmd_z = self._rate_limit(self._prev_cmd_z, float(v_camera_z), self.max_cmd_rate_z)
+        self._prev_cmd_x = cmd_x
+        self._prev_cmd_y = cmd_y
+        self._prev_cmd_z = cmd_z
+
         twist = TwistStamped()
         twist.header.stamp = self.get_clock().now().to_msg()
         twist.header.frame_id = "camera"
-        twist.twist.linear.x = float(v_camera[0])
-        twist.twist.linear.y = float(v_camera[1])
-        twist.twist.linear.z = float(v_camera_z)
+        twist.twist.linear.x = cmd_x
+        twist.twist.linear.y = cmd_y
+        twist.twist.linear.z = cmd_z
         self.cmd_pub.publish(twist)
 
         if self.verbose:
             self._throttle_info(
                 "_last_verbose_cmd_log_t",
                 1.0,
-                f"v_camera={v_camera}, cmd linear=({twist.twist.linear.x}, "
-                f"{twist.twist.linear.y}, {twist.twist.linear.z})",
+                f"v_camera={v_camera}, cmd linear=({cmd_x}, {cmd_y}, {cmd_z})",
             )
 
     def vehicle_velocity_cb(self, msg: Odometry):
@@ -227,6 +275,14 @@ class VisualServo(Node):
         age = (self.get_clock().now() - self._last_circle_t).nanoseconds * 1e-9
         if age > self.lost_target_timeout_sec:
             self._publish_active(False)
+            # Reset EMA state so a new lock starts fresh
+            self._ema_u = None
+            self._ema_v = None
+            self._ema_r = None
+            self._ema_depth = None
+            self._prev_cmd_x = 0.0
+            self._prev_cmd_y = 0.0
+            self._prev_cmd_z = 0.0
 
     def _publish_active(self, is_active: bool, force: bool = False):
         if not force and self._target_active == is_active:

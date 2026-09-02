@@ -3,7 +3,7 @@ circle_detector:
   ros__parameters:
     image_topic: /uav1/camera/color/image_raw
     circle_topic: /detected_circle
-    show_window: true
+    show_window: false
     desired_color: blue
 
 visual_servo_controller:
