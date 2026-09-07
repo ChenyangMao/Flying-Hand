@@ -8,6 +8,8 @@ Project website: https://mrsdprojects.ri.cmu.edu/2026teamc/
 
 This repository contains the software stack (PX4/SITL, Gazebo simulation, MAVROS, and ROS 2 control) used to support operator-guided deployment and autonomous contact interaction: an operator pilots to an area/point of interest, after which the system executes the contact procedure and streams data back to the ground station.
 
+Sim-to-real bring-up plan (frames, topics, mounts, team schedule): [SIM_TO_REAL_PLAN.md](SIM_TO_REAL_PLAN.md)
+
 ## Configuration Instructions
 
 ### ROS 2 environment
