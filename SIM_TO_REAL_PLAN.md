@@ -156,7 +156,7 @@ python3 scripts/ft_sensor_bridge.py \
 **Axis acceptance tests (required):**
 
 1. Gently push the end-effector along the **wall normal** → `/ft_data.wrench.force.x` increases with the **agreed sign**
-2. **Agreement: when pressing into the wall, `force.x` is _______ (positive / negative)**
+2. **Agreement: when pressing into the wall, `force.x` is positive**
 3. Camera facing the wall: target motion in the image matches vehicle pitch/yaw; optical axis roughly forward (adjust per mission)
 
 Placeholder values in launch (sim leftovers — **not final for hardware**):
